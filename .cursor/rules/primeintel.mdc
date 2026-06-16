@@ -1,0 +1,133 @@
+# PrimeIntel Cursor Rules
+
+## Project Summary
+
+PrimeIntel is a California public works bid intelligence platform.
+
+The system will scrape public bid portals, download bid/spec PDFs, store PDFs in Cloudflare R2, extract structured bid intelligence using AI, compare two independent AI scanner results, assign confidence levels, and display results inside a contractor dashboard.
+
+## Tech Stack
+
+Use this stack unless explicitly changed:
+
+- Next.js App Router
+- TypeScript
+- Tailwind CSS
+- shadcn/ui
+- Supabase PostgreSQL + Auth
+- Cloudflare R2 for PDF storage
+- Playwright for scraping
+- BullMQ + Upstash Redis for background queues
+- Claude API as primary AI extractor
+- OpenAI API as secondary AI extractor
+- Resend for email alerts
+- Vercel for frontend and normal API routes
+- Railway or Render for long-running background workers
+
+## MVP Goal
+
+Build the MVP step by step:
+
+1. One public bid source first
+2. Scraper for bid listings
+3. PDF download and storage
+4. Claude AI extraction
+5. OpenAI second scanner
+6. Field-by-field comparison
+7. Confidence scoring
+8. Manual review queue
+9. Basic dashboard
+10. Deployment
+
+## Development Rules
+
+- Do not build the full app in one step.
+- Work one module at a time.
+- Always explain the plan before editing many files.
+- Do not remove existing code unless explicitly asked.
+- Do not modify unrelated files.
+- Do not invent missing business logic.
+- Do not create fake extraction values.
+- If a bid field is missing, return null.
+- Keep scraper logic separate from database persistence.
+- Keep AI extraction logic separate from comparison logic.
+- Validate all AI JSON output with Zod.
+- Use TypeScript types for all bid and extraction structures.
+- Never expose API keys in frontend code.
+- Never commit .env.local or real credentials.
+- Never use Supabase service-role key in client-side code.
+
+## PrimeIntel Build Order
+
+Follow this order:
+
+1. Database schema
+2. App shell
+3. First scraper
+4. PDF downloader
+5. Cloudflare R2 storage helper
+6. PDF text extraction
+7. Claude extraction
+8. OpenAI second extraction
+9. Comparison/confidence engine
+10. Manual review admin
+11. Dashboard
+12. Auth
+13. Saved bids
+14. Alerts/email
+15. Production deployment
+
+## Code Quality Rules
+
+- Use small reusable functions.
+- Add error handling for external services.
+- Log scraper failures.
+- Log AI extraction failures.
+- Avoid large files when possible.
+- Prefer clean readable code over clever code.
+- Add comments only where the logic is not obvious.
+- Keep each file focused on one responsibility.
+
+## Security Rules
+
+- Do not expose secrets to browser/client code.
+- Use environment variables for all API keys.
+- Use .env.example for placeholders only.
+- Do not commit .env.local.
+- Use Supabase Row Level Security where user data is involved.
+- Use service-role key only in protected server-side workers or server-only API routes.
+
+## AI Extraction Rules
+
+- Never guess extracted bid values.
+- Return null when a field is not found.
+- Store raw AI output for debugging.
+- Validate parsed AI output with Zod.
+- If Claude and OpenAI conflict on critical fields, mark the bid for manual review.
+- Critical fields include engineer estimate, liquidated damages, duration, bond, DBE goal, license, and bid date.
+
+## Scraper Rules
+
+- Use Playwright for scraping public bid portals.
+- Normalize scraper output before saving.
+- Avoid duplicates using source_url or source_id.
+- Log each scrape run.
+- Handle missing fields safely.
+- Do not hardcode fake bid data.
+- Do not make assumptions if the portal does not show a value.
+
+## Manual Review Rules
+
+Low-confidence or conflicting bids must go to manual review.
+
+Manual review should allow an admin to:
+
+- View bid details
+- Open the source URL
+- Open the stored PDF
+- Compare Claude result
+- Compare OpenAI result
+- See conflicts
+- Approve result
+- Correct result
+- Mark result as failed
