@@ -8,11 +8,15 @@ const AGENCY = 'Caltrans' as const;
 const LISTING_URL = 'https://ccop.dot.ca.gov/allProjects';
 const BASE_URL = 'https://ccop.dot.ca.gov';
 const LOG_PREFIX = '[caltrans-scraper]';
+const FETCH_TIMEOUT_MS = 15000;
+
+const USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 const FETCH_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'User-Agent': USER_AGENT,
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
 };
 
 const UNPARSEABLE_DATE_VALUES = new Set(['tbd', 'n/a', '-', '—', 'pending', '']);
@@ -197,11 +201,52 @@ function parseRows(
   return { listings, errors };
 }
 
+function countProjectRows(rows: TableRows): number {
+  return rows.filter((row) => row.querySelectorAll('td').length >= 2).length;
+}
+
+function detectPagination(html: string): boolean {
+  const root = parse(html);
+
+  if (
+    root.querySelector(
+      '.pagination, [class*="pagination"], [class*="pager"], nav[aria-label*="pagination" i]',
+    )
+  ) {
+    return true;
+  }
+
+  for (const link of root.querySelectorAll('a, button')) {
+    const text = normalizeText(link.text).toLowerCase();
+    if (
+      text === 'next' ||
+      text === 'previous' ||
+      text === 'prev' ||
+      /^page \d+$/i.test(text)
+    ) {
+      return true;
+    }
+  }
+
+  return /page\s+\d+\s+of\s+\d+/i.test(html);
+}
+
+function warnIfPaginationDetected(html: string): void {
+  if (detectPagination(html)) {
+    console.log(
+      `${LOG_PREFIX} Warning: pagination appears to exist but is not handled yet. Only the first page will be scraped.`,
+    );
+  }
+}
+
 async function getHtmlViaFetch(): Promise<string | null> {
   console.log(`${LOG_PREFIX} Fetching via HTTP...`);
 
   try {
-    const response = await fetch(LISTING_URL, { headers: FETCH_HEADERS });
+    const response = await fetch(LISTING_URL, {
+      headers: FETCH_HEADERS,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
 
     if (!response.ok) {
       console.log(
@@ -212,6 +257,13 @@ async function getHtmlViaFetch(): Promise<string | null> {
 
     return await response.text();
   } catch (err) {
+    if (err instanceof Error && err.name === 'TimeoutError') {
+      console.log(
+        `${LOG_PREFIX} Fetch failed (timeout after ${FETCH_TIMEOUT_MS / 1000}s). Falling back to Playwright...`,
+      );
+      return null;
+    }
+
     const message = err instanceof Error ? err.message : String(err);
     console.log(
       `${LOG_PREFIX} Fetch failed (${message}). Falling back to Playwright...`,
@@ -224,9 +276,11 @@ async function getHtmlViaPlaywright(): Promise<string> {
   console.log(`${LOG_PREFIX} Launching Playwright (Chromium headless)...`);
 
   const browser = await chromium.launch({ headless: true });
+  let context;
 
   try {
-    const page = await browser.newPage();
+    context = await browser.newContext({ userAgent: USER_AGENT });
+    const page = await context.newPage();
     await page.goto(LISTING_URL, { timeout: 30000 });
     await page.waitForSelector('table', { timeout: 20000 });
     return await page.content();
@@ -235,6 +289,7 @@ async function getHtmlViaPlaywright(): Promise<string> {
       `Playwright navigation failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   } finally {
+    await context?.close();
     await browser.close();
   }
 }
@@ -248,7 +303,11 @@ export async function scrapeCaltrans(): Promise<CaltransScraperResult> {
   if (fetchHtml) {
     tableResult = findTableAndRows(fetchHtml);
     if (tableResult) {
-      console.log(`${LOG_PREFIX} Table found in fetch HTML. Parsing...`);
+      const rowCount = countProjectRows(tableResult.rows);
+      console.log(
+        `${LOG_PREFIX} Table found in fetch HTML. ${rowCount} project rows found. Parsing...`,
+      );
+      warnIfPaginationDetected(fetchHtml);
       method = 'fetch';
     } else {
       console.log(
@@ -267,7 +326,11 @@ export async function scrapeCaltrans(): Promise<CaltransScraperResult> {
       );
     }
 
-    console.log(`${LOG_PREFIX} Table found via Playwright. Parsing...`);
+    const rowCount = countProjectRows(tableResult.rows);
+    console.log(
+      `${LOG_PREFIX} Table found via Playwright. ${rowCount} project rows found. Parsing...`,
+    );
+    warnIfPaginationDetected(playwrightHtml);
     method = 'playwright';
   }
 
