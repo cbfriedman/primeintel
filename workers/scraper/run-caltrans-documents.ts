@@ -1,40 +1,25 @@
-// Run with: npx tsx workers/scraper/run-caltrans.ts
+// Run with: npx tsx workers/scraper/run-caltrans-documents.ts
 import { loadEnvLocal } from './env';
-import { saveCaltransBids } from './save-bids';
-import { saveCaltransDocuments } from './save-documents';
+import { loadCaltransSavedBids, saveCaltransDocuments } from './save-documents';
 
-const PREVIEW_COUNT = 5;
 const SAVED_DOCS_PREVIEW_COUNT = 3;
 
 async function main() {
   loadEnvLocal();
 
-  console.log(
-    'Running Caltrans CCOP scraper, saving bids, and extracting documents...\n',
-  );
+  console.log('Running Caltrans document extraction against saved bids...\n');
 
   try {
-    const bidResult = await saveCaltransBids();
+    const savedBids = await loadCaltransSavedBids();
 
-    console.log(`\n--- First ${PREVIEW_COUNT} normalized listings ---`);
-    console.log(
-      JSON.stringify(bidResult.listings.slice(0, PREVIEW_COUNT), null, 2),
-    );
-
-    console.log('\n--- Bid save summary ---');
-    console.log(`Scrape run ID: ${bidResult.scrapeRunId}`);
-    console.log(`Method:        ${bidResult.method}`);
-    console.log(`Bids found:    ${bidResult.bids_found}`);
-    console.log(`Bids new:      ${bidResult.bids_new}`);
-    console.log(`Bids updated:  ${bidResult.bids_updated}`);
-    console.log(`Errors:        ${bidResult.errors.length}`);
-
-    if (bidResult.errors.length > 0) {
-      console.log('\nBid save errors:');
-      bidResult.errors.forEach((error) => console.log(`  - ${error}`));
+    if (savedBids.length === 0) {
+      console.log('No Caltrans bids found in Supabase. Run run-caltrans.ts first.');
+      return;
     }
 
-    const docResult = await saveCaltransDocuments(bidResult.savedBids);
+    console.log(`Loaded ${savedBids.length} Caltrans bid(s) from Supabase.\n`);
+
+    const docResult = await saveCaltransDocuments(savedBids);
 
     console.log('\n--- Document save summary ---');
     console.log(`Bids checked:        ${docResult.bids_checked}`);
