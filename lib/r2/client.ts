@@ -1,0 +1,83 @@
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+
+type R2Config = {
+  accountId: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  bucketName: string;
+};
+
+function readEnv(primary: string, fallback?: string): string | undefined {
+  const value = process.env[primary] ?? (fallback ? process.env[fallback] : undefined);
+  return value?.trim() || undefined;
+}
+
+export function getR2Config(): R2Config {
+  const accountId =
+    readEnv('R2_ACCOUNT_ID', 'CLOUDFLARE_R2_ACCOUNT_ID') ?? '';
+  const accessKeyId =
+    readEnv('R2_ACCESS_KEY_ID', 'CLOUDFLARE_R2_ACCESS_KEY_ID') ?? '';
+  const secretAccessKey =
+    readEnv('R2_SECRET_ACCESS_KEY', 'CLOUDFLARE_R2_SECRET_ACCESS_KEY') ?? '';
+  const bucketName =
+    readEnv('R2_BUCKET_NAME', 'CLOUDFLARE_R2_BUCKET_NAME') ?? '';
+
+  const missing: string[] = [];
+  if (!accountId) missing.push('R2_ACCOUNT_ID');
+  if (!accessKeyId) missing.push('R2_ACCESS_KEY_ID');
+  if (!secretAccessKey) missing.push('R2_SECRET_ACCESS_KEY');
+  if (!bucketName) missing.push('R2_BUCKET_NAME');
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing R2 environment variable(s): ${missing.join(', ')}. Set R2_* or CLOUDFLARE_R2_* values in .env.local.`,
+    );
+  }
+
+  return { accountId, accessKeyId, secretAccessKey, bucketName };
+}
+
+let cachedClient: S3Client | null = null;
+
+export function createR2Client(): S3Client {
+  if (cachedClient) {
+    return cachedClient;
+  }
+
+  const config = getR2Config();
+  cachedClient = new S3Client({
+    region: 'auto',
+    endpoint: `https://${config.accountId}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+  });
+
+  return cachedClient;
+}
+
+export type UploadPdfOptions = {
+  key: string;
+  body: Buffer;
+  metadata?: Record<string, string>;
+};
+
+export async function uploadPdfToR2(options: UploadPdfOptions): Promise<void> {
+  const config = getR2Config();
+  const client = createR2Client();
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: config.bucketName,
+      Key: options.key,
+      Body: options.body,
+      ContentType: 'application/pdf',
+      Metadata: options.metadata,
+    }),
+  );
+}
+
+export function getR2BucketName(): string {
+  return getR2Config().bucketName;
+}
