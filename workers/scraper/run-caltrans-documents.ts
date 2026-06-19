@@ -5,7 +5,7 @@ import { loadCaltransSavedBids, saveCaltransDocuments } from './save-documents';
 const SAVED_DOCS_PREVIEW_COUNT = 3;
 
 async function main() {
-  loadEnvLocal();
+  loadEnvLocal({ required: true });
 
   console.log('Running Caltrans document extraction against saved bids...\n');
 

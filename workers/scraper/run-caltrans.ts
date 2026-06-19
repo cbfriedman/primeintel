@@ -7,7 +7,7 @@ const PREVIEW_COUNT = 5;
 const SAVED_DOCS_PREVIEW_COUNT = 3;
 
 async function main() {
-  loadEnvLocal();
+  loadEnvLocal({ required: true });
 
   console.log(
     'Running Caltrans CCOP scraper, saving bids, and extracting documents...\n',

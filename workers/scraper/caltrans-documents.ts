@@ -329,14 +329,6 @@ function detectAuthWall(
   return null;
 }
 
-function pageLikelyNeedsPlaywright(fetchHtml: string, pageUrl: string): boolean {
-  if (/caleprocure\.ca\.gov\/event\//i.test(pageUrl)) {
-    return true;
-  }
-
-  return htmlLooksLikeJsShell(fetchHtml);
-}
-
 function getPlaywrightFallbackReason(
   fetchHtml: string | null,
   documents: NormalizedBidDocument[],

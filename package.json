@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",
+    "dotenv": "^17.4.2",
     "next": "16.2.9",
     "node-html-parser": "^7.1.0",
     "playwright": "^1.61.0",
