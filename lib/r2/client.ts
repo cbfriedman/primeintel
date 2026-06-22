@@ -81,3 +81,18 @@ export async function uploadPdfToR2(options: UploadPdfOptions): Promise<void> {
 export function getR2BucketName(): string {
   return getR2Config().bucketName;
 }
+
+/**
+ * Stable public URL when `CLOUDFLARE_R2_PUBLIC_BASE_URL` (or `R2_PUBLIC_BASE_URL`) is set.
+ * Returns null for private buckets — signed download URLs are generated on demand elsewhere.
+ */
+export function getStablePublicR2Url(objectKey: string): string | null {
+  const baseUrl = readEnv('CLOUDFLARE_R2_PUBLIC_BASE_URL', 'R2_PUBLIC_BASE_URL');
+  if (!baseUrl) {
+    return null;
+  }
+
+  const normalizedBase = baseUrl.replace(/\/$/, '');
+  const normalizedKey = objectKey.replace(/^\//, '');
+  return `${normalizedBase}/${normalizedKey}`;
+}

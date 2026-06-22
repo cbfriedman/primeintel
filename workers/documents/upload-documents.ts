@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 
 import { createAdminClient } from '@/lib/supabase/admin';
-import { getR2BucketName, getR2Config, uploadPdfToR2 } from '@/lib/r2/client';
+import {
+  getR2BucketName,
+  getR2Config,
+  getStablePublicR2Url,
+  uploadPdfToR2,
+} from '@/lib/r2/client';
 import { buildCaltransStorageKey, sanitizeFilename } from '@/lib/r2/storage-key';
 
 import type { BidDocumentType, SavedDocRef } from '../scraper/types';
@@ -21,6 +26,10 @@ export type UploadDocumentsResult = {
     r2Key: string;
     sizeBytes: number;
   }>;
+};
+
+export type UploadPendingDocumentsOptions = {
+  limit?: number;
 };
 
 type BidDocumentRow = {
@@ -63,7 +72,9 @@ function toSavedDocRef(row: BidDocumentRow): SavedDocRef | null {
   };
 }
 
-export async function loadPendingUploadDocuments(): Promise<SavedDocRef[]> {
+export async function loadPendingUploadDocuments(
+  limit: number,
+): Promise<SavedDocRef[]> {
   const supabase = createAdminClient();
 
   const { data, error } = await supabase
@@ -71,7 +82,8 @@ export async function loadPendingUploadDocuments(): Promise<SavedDocRef[]> {
     .select('id, bid_id, source_url, document_type, title, r2_key')
     .is('r2_key', null)
     .not('source_url', 'is', null)
-    .order('created_at', { ascending: true });
+    .order('created_at', { ascending: true })
+    .limit(limit);
 
   if (error) {
     throw new Error(`Failed to load pending bid documents: ${error.message}`);
@@ -92,18 +104,28 @@ async function markDocumentUploaded(
   const supabase = createAdminClient();
   const bucket = getR2BucketName();
 
+  // Private bucket: r2_key holds the deterministic object key (source of truth).
+  // r2_url is only set when a stable public base URL is configured.
+  // Signed download URLs are generated on demand and are not stored here.
+  const updatePayload: Record<string, unknown> = {
+    r2_bucket: bucket,
+    r2_key: r2Key,
+    file_name: fileName,
+    content_type: 'application/pdf',
+    size_bytes: sizeBytes,
+    sha256,
+    downloaded_at: new Date().toISOString(),
+    extraction_error: null,
+  };
+
+  const stablePublicUrl = getStablePublicR2Url(r2Key);
+  if (stablePublicUrl) {
+    updatePayload.r2_url = stablePublicUrl;
+  }
+
   const { error } = await supabase
     .from('bid_documents')
-    .update({
-      r2_bucket: bucket,
-      r2_key: r2Key,
-      file_name: fileName,
-      content_type: 'application/pdf',
-      size_bytes: sizeBytes,
-      sha256,
-      downloaded_at: new Date().toISOString(),
-      extraction_error: null,
-    })
+    .update(updatePayload)
     .eq('id', document.documentId)
     .is('r2_key', null);
 
@@ -129,8 +151,6 @@ async function markDocumentDownloadFailed(
 export async function uploadDocuments(
   documents: SavedDocRef[],
 ): Promise<UploadDocumentsResult> {
-  getR2Config();
-
   const errors: string[] = [];
   const uploadedDocs: UploadDocumentsResult['uploadedDocs'] = [];
   let documents_uploaded = 0;
@@ -242,10 +262,13 @@ export async function uploadDocuments(
   };
 }
 
-export async function uploadPendingDocuments(): Promise<UploadDocumentsResult> {
+export async function uploadPendingDocuments(
+  options: UploadPendingDocumentsOptions = {},
+): Promise<UploadDocumentsResult> {
   getR2Config();
 
-  const documents = await loadPendingUploadDocuments();
+  const limit = options.limit ?? 3;
+  const documents = await loadPendingUploadDocuments(limit);
 
   if (documents.length === 0) {
     console.log(`${LOG_PREFIX} No pending documents with source_url and empty r2_key.`);
