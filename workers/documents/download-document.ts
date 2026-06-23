@@ -25,7 +25,7 @@ const FETCH_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-function getMaxDownloadBytes(): number {
+export function getMaxDownloadBytes(): number {
   const raw = process.env.DOCUMENT_MAX_DOWNLOAD_BYTES?.trim();
   if (!raw) {
     return DEFAULT_MAX_DOWNLOAD_BYTES;
@@ -87,7 +87,7 @@ function detectBlockedHtmlResponse(
   return 'HTML response instead of PDF';
 }
 
-function validateDownloadedPdf(
+export function validateDownloadedPdf(
   buffer: Buffer,
   contentType: string,
   maxBytes: number,
@@ -129,7 +129,20 @@ function parseContentLengthHeader(contentLength: string | null): number | null {
   return parsed;
 }
 
+export function isCaleprocureViewredirectUrl(sourceUrl: string): boolean {
+  // Re-exported classification — session-bound URLs require Playwright download.
+  return /caleprocure\.ca\.gov.*viewredirect/i.test(sourceUrl);
+}
+
 export async function downloadDocument(sourceUrl: string): Promise<DownloadDocumentResult> {
+  if (isCaleprocureViewredirectUrl(sourceUrl)) {
+    return {
+      ok: false,
+      error:
+        'CaleProcure viewredirect URLs require a browser session — use downloadCaleprocureDocumentsForBid instead',
+    };
+  }
+
   const maxBytes = getMaxDownloadBytes();
 
   try {

@@ -7,10 +7,20 @@ import type {
   NormalizedBidDocument,
   SavedBidRef,
 } from './types';
+import {
+  classifyDocumentSourceUrl,
+  isSessionBoundDocumentUrl,
+  logSessionBoundDocumentUrl,
+  sanitizeErrorMessage,
+} from './document-source-url';
 
 const LOG_PREFIX = '[caltrans-documents]';
 const FETCH_TIMEOUT_MS = 15000;
 const PLAYWRIGHT_TIMEOUT_MS = 30000;
+const CALEPROCURE_PLAYWRIGHT_TIMEOUT_MS = 60000;
+const CALEPROCURE_HYDRATION_TIMEOUT_MS = 45000;
+const CALEPROCURE_PACKAGE_TIMEOUT_MS = 30000;
+const CALEPROCURE_BETWEEN_BIDS_DELAY_MS = 2000;
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -63,12 +73,21 @@ function isLikelyDocumentUrl(url: string): boolean {
     return false;
   }
 
+  if (/viewredirect\/.*\.pdf/i.test(url)) return true;
   if (/\.pdf(\?|#|$)/i.test(url)) return true;
   if (/\.docx?(\?|#|$)/i.test(url)) return true;
   if (/\.xlsx?(\?|#|$)/i.test(url)) return true;
   if (/sys_attachment\.do/i.test(url)) return true;
 
   return false;
+}
+
+function isCaleprocureEventUrl(pageUrl: string): boolean {
+  return /caleprocure\.ca\.gov\/event\//i.test(pageUrl);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function documentNameFromUrl(sourceUrl: string): string {
@@ -104,7 +123,7 @@ function classifyDocType(name: string, url: string): BidDocumentType {
     return 'plans';
   }
 
-  if (/spec|specification|bid\s*book|proposal|ifb|rfp|contract\s*document/.test(combined)) {
+  if (/spec|specification|bid\s*book|proposal|ifb|rfp|contract\s*document|solicitation/.test(combined)) {
     return 'spec';
   }
 
@@ -178,6 +197,7 @@ function buildDocumentsFromUrls(
       bidId,
       name,
       sourceUrl,
+      sourceUrlKind: classifyDocumentSourceUrl(sourceUrl),
       docType: classifyDocType(name, sourceUrl),
       fileSize: null,
     });
@@ -234,6 +254,7 @@ function buildDocumentsFromLinks(
         bidId,
         name,
         sourceUrl,
+        sourceUrlKind: classifyDocumentSourceUrl(sourceUrl),
         docType: classifyDocType(`${name} ${rowText}`, sourceUrl),
         fileSize: extractFileSize(rowText) ?? extractFileSize(text),
       });
@@ -432,7 +453,15 @@ function attachNetworkDocumentCollector(page: import('playwright').Page): string
   return networkDocUrls;
 }
 
-async function waitForCaleprocureEventContent(page: import('playwright').Page): Promise<void> {
+type CaleprocureHydrationState = {
+  hydrated: boolean;
+  eventName: string;
+  viewPackageEnabled: boolean;
+};
+
+async function waitForCaleprocureEventHydration(
+  page: import('playwright').Page,
+): Promise<CaleprocureHydrationState> {
   try {
     await page.waitForFunction(
       () => {
@@ -444,36 +473,141 @@ async function waitForCaleprocureEventContent(page: import('playwright').Page): 
           (eventName?.textContent?.trim().length ?? 0) > 0
         );
       },
-      { timeout: 30000 },
+      { timeout: CALEPROCURE_HYDRATION_TIMEOUT_MS },
     );
   } catch {
     // Continue if InFlight event hydration is slow or blocked.
   }
+
+  return page.evaluate(() => {
+    const eventName =
+      document.querySelector('[data-if-label="eventName"]')?.textContent?.trim() ?? '';
+    const viewPackageButton = document.querySelector(
+      'button[data-if-label="viewPackage"]',
+    ) as HTMLButtonElement | null;
+
+    return {
+      hydrated: eventName.length > 0,
+      eventName,
+      viewPackageEnabled: viewPackageButton != null && !viewPackageButton.disabled,
+    };
+  });
 }
 
-async function tryOpenCaleprocureEventPackage(
+async function closeCaleprocureAttachmentModal(
   page: import('playwright').Page,
 ): Promise<void> {
+  await page.evaluate(() => {
+    const modal = document.querySelector('#attachmentWrapperModal');
+    if (modal) {
+      modal.classList.remove('in');
+      (modal as HTMLElement).style.display = 'none';
+      modal.setAttribute('aria-hidden', 'true');
+    }
+
+    document.querySelectorAll('.modal-backdrop').forEach((element) => element.remove());
+    document.body.classList.remove('modal-open');
+  });
+}
+
+async function extractCaleprocurePackageDocuments(
+  page: import('playwright').Page,
+  bidId: string,
+): Promise<NormalizedBidDocument[]> {
   const viewPackageButton = page.locator('button[data-if-label="viewPackage"]');
 
   if ((await viewPackageButton.count()) === 0) {
-    return;
+    console.log(`${LOG_PREFIX} Bid ${bidId}: viewPackage button not found`);
+    return [];
   }
 
   if (!(await viewPackageButton.isEnabled())) {
-    return;
+    console.log(`${LOG_PREFIX} Bid ${bidId}: viewPackage button disabled (no package available)`);
+    return [];
   }
 
+  await viewPackageButton.click({ timeout: 10000 });
+
   try {
-    await Promise.all([
-      page.waitForEvent('download', { timeout: 15000 }).catch(() => null),
-      page.waitForEvent('popup', { timeout: 15000 }).catch(() => null),
-      viewPackageButton.click({ timeout: 5000 }),
-    ]);
-    await page.waitForLoadState('networkidle', { timeout: 30000 });
+    await page.waitForSelector('[id^="PV_ATTACH_WRK_SCM_DOWNLOAD$"]', {
+      timeout: CALEPROCURE_PACKAGE_TIMEOUT_MS,
+    });
   } catch {
-    // Package modal/download links may not appear for every event.
+    console.log(
+      `${LOG_PREFIX} Bid ${bidId}: viewPackage opened but no attachment download buttons appeared`,
+    );
+    return [];
   }
+
+  const buttonIds = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[id^="PV_ATTACH_WRK_SCM_DOWNLOAD$"]')).map(
+      (element) => (element as HTMLElement).id,
+    ),
+  );
+
+  console.log(
+    `${LOG_PREFIX} Bid ${bidId}: ${buttonIds.length} CaleProcure package attachment(s) in table`,
+  );
+
+  const documents: NormalizedBidDocument[] = [];
+  const seenUrls = new Set<string>();
+  let previousUrl = '';
+
+  for (const buttonId of buttonIds) {
+    await closeCaleprocureAttachmentModal(page);
+
+    await page.evaluate((id) => {
+      document.getElementById(id)?.click();
+    }, buttonId);
+
+    try {
+      await page.waitForFunction(
+        (prev) => {
+          const link = document.querySelector(
+            'a[data-if-label="attachmentLink"]',
+          ) as HTMLAnchorElement | null;
+          const href = link?.href ?? '';
+          return /viewredirect/i.test(href) && /\.pdf/i.test(href) && href !== prev;
+        },
+        previousUrl,
+        { timeout: 15000 },
+      );
+    } catch {
+      console.log(
+        `${LOG_PREFIX} Bid ${bidId}: timed out waiting for download URL after ${buttonId}`,
+      );
+      continue;
+    }
+
+    const sourceUrl =
+      (await page.locator('a[data-if-label="attachmentLink"]').getAttribute('href')) ?? '';
+
+    if (!sourceUrl || !isLikelyDocumentUrl(sourceUrl) || seenUrls.has(sourceUrl)) {
+      continue;
+    }
+
+    previousUrl = sourceUrl;
+    seenUrls.add(sourceUrl);
+
+    const name = documentNameFromUrl(sourceUrl);
+
+    documents.push({
+      bidId,
+      name,
+      sourceUrl,
+      sourceUrlKind: classifyDocumentSourceUrl(sourceUrl),
+      docType: classifyDocType(name, sourceUrl),
+      fileSize: null,
+    });
+
+    if (isSessionBoundDocumentUrl(sourceUrl)) {
+      logSessionBoundDocumentUrl(LOG_PREFIX, bidId, name);
+    }
+
+    console.log(`${LOG_PREFIX} Bid ${bidId}: resolved package PDF "${name}"`);
+  }
+
+  return documents;
 }
 
 async function collectPlaywrightDocuments(
@@ -523,26 +657,26 @@ async function getDocumentsViaPlaywright(
 
   try {
     const response = await page.goto(pageUrl, {
-      timeout: PLAYWRIGHT_TIMEOUT_MS,
+      timeout: isCaleprocureEventUrl(pageUrl)
+        ? CALEPROCURE_PLAYWRIGHT_TIMEOUT_MS
+        : PLAYWRIGHT_TIMEOUT_MS,
       waitUntil: 'load',
     });
 
     const httpStatus = response?.status() ?? 0;
 
-    if (/caleprocure\.ca\.gov\/event\//i.test(pageUrl)) {
-      await page.waitForLoadState('networkidle', { timeout: PLAYWRIGHT_TIMEOUT_MS }).catch(
-        () => undefined,
-      );
-      await waitForCaleprocureEventContent(page);
+    if (isCaleprocureEventUrl(pageUrl)) {
+      await page
+        .waitForLoadState('networkidle', { timeout: CALEPROCURE_PLAYWRIGHT_TIMEOUT_MS })
+        .catch(() => undefined);
 
-      const documentsBeforePackage = await collectPlaywrightDocuments(
-        page,
-        bidId,
-        pageUrl,
-        [...networkDocUrls],
-      );
+      const hydration = await waitForCaleprocureEventHydration(page);
 
-      await tryOpenCaleprocureEventPackage(page);
+      if (!hydration.hydrated) {
+        console.log(
+          `${LOG_PREFIX} Bid ${bidId} (${pageUrl}): CaleProcure event page did not hydrate — eventName empty after ${CALEPROCURE_HYDRATION_TIMEOUT_MS}ms`,
+        );
+      }
 
       const finalUrl = page.url();
       const html = await page.content();
@@ -552,48 +686,18 @@ async function getDocumentsViaPlaywright(
         return { documents: [], authWall };
       }
 
-      const documentsAfterPackage = await collectPlaywrightDocuments(
-        page,
-        bidId,
-        pageUrl,
-        networkDocUrls,
+      const packageDocuments = filterSiteWideNoiseDocuments(
+        await extractCaleprocurePackageDocuments(page, bidId),
       );
 
-      const beforeUrls = new Set(documentsBeforePackage.map((doc) => doc.sourceUrl));
-      const packageDocuments = documentsAfterPackage.filter(
-        (doc) => !beforeUrls.has(doc.sourceUrl),
-      );
-
-      const candidateDocuments =
-        packageDocuments.length > 0 ? packageDocuments : documentsAfterPackage;
-
-      const documents = filterSiteWideNoiseDocuments(candidateDocuments);
-
-      if (documents.length === 0) {
-        const diagnostics = await page.evaluate(() => {
-          const main = document.querySelector('#main');
-          return {
-            mainVisible: main != null && !main.classList.contains('hidden'),
-            eventName:
-              document.querySelector('[data-if-label="eventName"]')?.textContent?.trim() ??
-              '',
-            pdfLinkCount: document.querySelectorAll('a[href*=".pdf"]').length,
-            viewPackageEnabled: (() => {
-              const button = document.querySelector(
-                'button[data-if-label="viewPackage"]',
-              ) as HTMLButtonElement | null;
-              return button != null && !button.disabled;
-            })(),
-          };
-        });
-
+      if (packageDocuments.length === 0) {
         console.log(
-          `${LOG_PREFIX} Bid ${bidId} (${pageUrl}): no public PDF links found after Playwright — mainVisible=${diagnostics.mainVisible}, eventName="${diagnostics.eventName}", pdfLinks=${diagnostics.pdfLinkCount}, viewPackageEnabled=${diagnostics.viewPackageEnabled}`,
+          `${LOG_PREFIX} Bid ${bidId} (${pageUrl}): no CaleProcure package PDFs resolved — hydrated=${hydration.hydrated}, eventName="${hydration.eventName}", viewPackageEnabled=${hydration.viewPackageEnabled}`,
         );
       }
 
       return {
-        documents,
+        documents: packageDocuments,
         authWall: null,
       };
     }
@@ -636,6 +740,8 @@ export async function extractCaltransDocuments(
 ): Promise<ExtractDocumentsResult> {
   const errors: string[] = [];
   const allDocuments: NormalizedBidDocument[] = [];
+  let bids_with_no_documents = 0;
+  let auth_blocked_bids = 0;
 
   console.log(`${LOG_PREFIX} Checking ${savedBids.length} bids for documents...`);
 
@@ -654,6 +760,7 @@ export async function extractCaltransDocuments(
       playwrightResources.context = await playwrightResources.browser.newContext({
         userAgent: USER_AGENT,
         locale: 'en-US',
+        viewport: { width: 1280, height: 720 },
         extraHTTPHeaders: {
           'Accept-Language': 'en-US,en;q=0.9',
         },
@@ -667,6 +774,7 @@ export async function extractCaltransDocuments(
       try {
         let documents: NormalizedBidDocument[] = [];
         const bidErrors: string[] = [];
+        let bidAuthBlocked = false;
 
         const fetchHtml = await getHtmlViaFetch(savedBid.sourceUrl);
 
@@ -705,6 +813,8 @@ export async function extractCaltransDocuments(
             );
 
             if (playwrightResult.authWall) {
+              bidAuthBlocked = true;
+              auth_blocked_bids += 1;
               console.log(
                 `${LOG_PREFIX} Bid ${savedBid.bidId} (${savedBid.sourceUrl}): ${playwrightResult.authWall} — no public documents extracted`,
               );
@@ -723,9 +833,17 @@ export async function extractCaltransDocuments(
         errors.push(...bidErrors);
         allDocuments.push(...documents);
 
+        if (documents.length === 0) {
+          bids_with_no_documents += 1;
+        }
+
         console.log(
-          `${LOG_PREFIX} Bid ${savedBid.bidId} (${savedBid.sourceUrl}): ${documents.length} document(s) found`,
+          `${LOG_PREFIX} Bid ${savedBid.bidId} (${savedBid.sourceUrl}): ${documents.length} document(s) found${bidAuthBlocked ? ' (auth blocked)' : ''}`,
         );
+
+        if (isCaleprocureEventUrl(savedBid.sourceUrl) && playwrightResources.context) {
+          await sleep(CALEPROCURE_BETWEEN_BIDS_DELAY_MS);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         errors.push(`Bid ${savedBid.bidId} (${savedBid.sourceUrl}): ${message}`);
@@ -751,6 +869,8 @@ export async function extractCaltransDocuments(
     bids_checked: savedBids.length,
     documents_found: allDocuments.length,
     documents: allDocuments,
-    errors,
+    bids_with_no_documents,
+    auth_blocked_bids,
+    errors: errors.map(sanitizeErrorMessage),
   };
 }

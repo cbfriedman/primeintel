@@ -8,6 +8,11 @@ import type {
   SavedDocRef,
 } from './types';
 import { extractCaltransDocuments } from './caltrans-documents';
+import {
+  formatDocumentLogLabel,
+  isSessionBoundDocumentUrl,
+  sanitizeErrorMessage,
+} from './document-source-url';
 
 const LOG_PREFIX = '[save-documents]';
 const SOURCE_NAME = 'caltrans';
@@ -41,9 +46,96 @@ function toSavedDocRef(
     documentId: row.id,
     bidId: row.bid_id,
     sourceUrl: row.source_url,
+    sourceUrlKind: document.sourceUrlKind,
     name: document.name,
     docType: row.document_type as BidDocumentType,
   };
+}
+
+function filenameFromSourceUrl(sourceUrl: string): string {
+  try {
+    const segment = new URL(sourceUrl).pathname.split('/').pop() ?? '';
+    return decodeURIComponent(segment.replace(/\+/g, ' '));
+  } catch {
+    const segment = sourceUrl.split('/').pop() ?? '';
+    return decodeURIComponent(segment.replace(/\+/g, ' '));
+  }
+}
+
+function isEphemeralCaleprocureUrl(sourceUrl: string): boolean {
+  return isSessionBoundDocumentUrl(sourceUrl);
+}
+
+type ExistingDocumentIndex = {
+  byBidAndUrl: Map<string, string>;
+  byBidAndFilename: Map<string, string>;
+};
+
+function buildExistingDocumentIndex(rows: BidDocumentRow[]): ExistingDocumentIndex {
+  const byBidAndUrl = new Map<string, string>();
+  const byBidAndFilename = new Map<string, string>();
+
+  for (const row of rows) {
+    byBidAndUrl.set(`${row.bid_id}::${row.source_url}`, row.id);
+
+    if (isEphemeralCaleprocureUrl(row.source_url)) {
+      const filename = filenameFromSourceUrl(row.source_url);
+      if (filename) {
+        byBidAndFilename.set(`${row.bid_id}::${filename}`, row.id);
+      }
+    }
+
+    if (row.title) {
+      const titleName = row.title.replace(/\s*\([^)]*\)\s*$/, '').trim();
+      if (titleName) {
+        byBidAndFilename.set(`${row.bid_id}::${titleName}`, row.id);
+      }
+    }
+  }
+
+  return { byBidAndUrl, byBidAndFilename };
+}
+
+function findExistingDocumentId(
+  document: NormalizedBidDocument,
+  index: ExistingDocumentIndex,
+): string | undefined {
+  const urlKey = `${document.bidId}::${document.sourceUrl}`;
+  const byUrl = index.byBidAndUrl.get(urlKey);
+  if (byUrl) {
+    return byUrl;
+  }
+
+  if (isEphemeralCaleprocureUrl(document.sourceUrl)) {
+    const filename = filenameFromSourceUrl(document.sourceUrl);
+    return index.byBidAndFilename.get(`${document.bidId}::${filename}`);
+  }
+
+  return undefined;
+}
+
+async function lookupExistingDocuments(
+  supabase: ReturnType<typeof createAdminClient>,
+  bidIds: string[],
+): Promise<BidDocumentRow[]> {
+  const rows: BidDocumentRow[] = [];
+  const lookupBatchSize = 50;
+
+  for (let index = 0; index < bidIds.length; index += lookupBatchSize) {
+    const batch = bidIds.slice(index, index + lookupBatchSize);
+    const { data, error } = await supabase
+      .from('bid_documents')
+      .select('id, bid_id, source_url, document_type, title')
+      .in('bid_id', batch);
+
+    if (error) {
+      throw new Error(`Failed to look up existing documents: ${error.message}`);
+    }
+
+    rows.push(...((data ?? []) as BidDocumentRow[]));
+  }
+
+  return rows;
 }
 
 async function upsertDocuments(
@@ -65,29 +157,13 @@ async function upsertDocuments(
   }
 
   const bidIds = [...new Set(documents.map((doc) => doc.bidId))];
-  const sourceUrls = documents.map((doc) => doc.sourceUrl);
 
-  // TODO: Supabase .in() has practical limits (~100 values). Batch lookups if documents exceed that.
-  const { data: existingRows, error: lookupError } = await supabase
-    .from('bid_documents')
-    .select('id, bid_id, source_url')
-    .in('bid_id', bidIds)
-    .in('source_url', sourceUrls);
-
-  if (lookupError) {
-    throw new Error(`Failed to look up existing documents: ${lookupError.message}`);
-  }
-
-  const existingByKey = new Map(
-    (existingRows ?? []).map((row) => [
-      `${row.bid_id}::${row.source_url}`,
-      row.id as string,
-    ]),
-  );
+  const existingRows = await lookupExistingDocuments(supabase, bidIds);
+  const existingIndex = buildExistingDocumentIndex(existingRows);
 
   for (const document of documents) {
     const key = `${document.bidId}::${document.sourceUrl}`;
-    const existingId = existingByKey.get(key);
+    const existingId = findExistingDocumentId(document, existingIndex);
 
     try {
       const row: BidDocumentInsertRow = {
@@ -103,6 +179,7 @@ async function upsertDocuments(
             .update({
               document_type: row.document_type,
               title: row.title,
+              source_url: row.source_url,
             })
             .eq('id', existingId)
             .select('id, bid_id, source_url, document_type, title')
@@ -114,9 +191,13 @@ async function upsertDocuments(
             .single();
 
       if (saveError || !data) {
-        const message = `Failed to save document ${document.sourceUrl} for bid ${document.bidId}: ${
-          saveError?.message ?? 'no data returned'
-        }`;
+        const message = sanitizeErrorMessage(
+          `Failed to save ${formatDocumentLogLabel({
+            bidId: document.bidId,
+            name: document.name,
+            sourceUrl: document.sourceUrl,
+          })}: ${saveError?.message ?? 'no data returned'}`,
+        );
         console.log(`${LOG_PREFIX} ${message}`);
         errors.push(message);
         continue;
@@ -128,12 +209,22 @@ async function upsertDocuments(
         documents_updated += 1;
       } else {
         documents_saved += 1;
-        existingByKey.set(key, data.id);
+        existingIndex.byBidAndUrl.set(key, data.id);
+        if (isEphemeralCaleprocureUrl(document.sourceUrl)) {
+          const filename = filenameFromSourceUrl(document.sourceUrl);
+          if (filename) {
+            existingIndex.byBidAndFilename.set(`${document.bidId}::${filename}`, data.id);
+          }
+        }
       }
     } catch (err) {
-      const message = `Failed to save document ${document.sourceUrl} for bid ${document.bidId}: ${
-        err instanceof Error ? err.message : String(err)
-      }`;
+      const message = sanitizeErrorMessage(
+        `Failed to save ${formatDocumentLogLabel({
+          bidId: document.bidId,
+          name: document.name,
+          sourceUrl: document.sourceUrl,
+        })}: ${err instanceof Error ? err.message : String(err)}`,
+      );
       console.log(`${LOG_PREFIX} ${message}`);
       errors.push(message);
     }
@@ -173,7 +264,7 @@ export async function saveCaltransDocuments(
   const { documents_saved, documents_updated, errors: saveErrors, savedDocs } =
     await upsertDocuments(extractResult.documents);
 
-  const errors = [...extractResult.errors, ...saveErrors];
+  const errors = [...extractResult.errors, ...saveErrors].map(sanitizeErrorMessage);
 
   console.log(
     `${LOG_PREFIX} Done. Bids checked: ${extractResult.bids_checked}, Documents found: ${extractResult.documents_found}, Documents saved: ${documents_saved}, Documents updated: ${documents_updated}, Errors: ${errors.length}`,
@@ -184,6 +275,8 @@ export async function saveCaltransDocuments(
     documents_found: extractResult.documents_found,
     documents_saved,
     documents_updated,
+    bids_with_no_documents: extractResult.bids_with_no_documents,
+    auth_blocked_bids: extractResult.auth_blocked_bids,
     errors,
     savedDocs,
   };

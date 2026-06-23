@@ -1,10 +1,16 @@
 // Run with: npx tsx workers/scraper/run-caltrans.ts
+import {
+  countSessionBoundDocuments,
+  printDocumentDiscoveryErrors,
+  printDocumentDiscoverySummary,
+  printSavedDocsPreview,
+  printSessionBoundUrlWarningIfNeeded,
+} from './document-discovery-summary';
 import { loadEnvLocal } from './env';
 import { saveCaltransBids } from './save-bids';
 import { saveCaltransDocuments } from './save-documents';
 
 const PREVIEW_COUNT = 5;
-const SAVED_DOCS_PREVIEW_COUNT = 3;
 
 async function main() {
   loadEnvLocal({ required: true });
@@ -36,27 +42,13 @@ async function main() {
 
     const docResult = await saveCaltransDocuments(bidResult.savedBids);
 
-    console.log('\n--- Document save summary ---');
-    console.log(`Bids checked:        ${docResult.bids_checked}`);
-    console.log(`Documents found:     ${docResult.documents_found}`);
-    console.log(`Documents saved:     ${docResult.documents_saved}`);
-    console.log(`Documents updated:   ${docResult.documents_updated}`);
-    console.log(`Errors:              ${docResult.errors.length}`);
-
-    if (docResult.savedDocs.length > 0) {
-      console.log(`\n--- First ${SAVED_DOCS_PREVIEW_COUNT} savedDocs ---`);
-      console.log(
-        JSON.stringify(
-          docResult.savedDocs.slice(0, SAVED_DOCS_PREVIEW_COUNT),
-          null,
-          2,
-        ),
-      );
-    }
+    printSessionBoundUrlWarningIfNeeded(countSessionBoundDocuments(docResult));
+    printDocumentDiscoverySummary(docResult);
+    printSavedDocsPreview(docResult.savedDocs);
+    printDocumentDiscoveryErrors(docResult.errors);
 
     if (docResult.errors.length > 0) {
-      console.log('\nDocument errors:');
-      docResult.errors.forEach((error) => console.log(`  - ${error}`));
+      process.exitCode = 1;
     }
   } catch (err) {
     console.error(

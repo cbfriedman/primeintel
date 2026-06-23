@@ -10,6 +10,8 @@ export type TextExtractionStatus =
   | "completed"
   | "failed";
 
+export type TextQuality = "good" | "medium" | "poor";
+
 export type RiskSeverity = "low" | "medium" | "high";
 
 export type RiskFlagSource = "claude" | "openai" | "comparison" | "manual";
@@ -69,6 +71,8 @@ export type BidDocument = {
   page_count: number | null;
   text_extraction_status: TextExtractionStatus;
   extracted_text: string | null;
+  text_quality: TextQuality | null;
+  requires_ocr: boolean;
   extraction_error: string | null;
   downloaded_at: string | null;
   created_at: string;

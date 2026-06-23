@@ -1,4 +1,5 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { Readable } from 'node:stream';
 
 type R2Config = {
   accountId: string;
@@ -95,4 +96,28 @@ export function getStablePublicR2Url(objectKey: string): string | null {
   const normalizedBase = baseUrl.replace(/\/$/, '');
   const normalizedKey = objectKey.replace(/^\//, '');
   return `${normalizedBase}/${normalizedKey}`;
+}
+
+async function readableToBuffer(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+export async function downloadPdfFromR2(
+  bucket: string,
+  key: string,
+): Promise<Buffer> {
+  const client = createR2Client();
+  const response = await client.send(
+    new GetObjectCommand({ Bucket: bucket, Key: key }),
+  );
+
+  if (!response.Body) {
+    throw new Error(`R2 object has no body: ${bucket}/${key}`);
+  }
+
+  return readableToBuffer(response.Body as Readable);
 }

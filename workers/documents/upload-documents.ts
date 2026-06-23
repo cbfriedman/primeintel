@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { chromium, type BrowserContext } from 'playwright';
+
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   getR2BucketName,
@@ -10,7 +12,20 @@ import {
 import { buildCaltransStorageKey, sanitizeFilename } from '@/lib/r2/storage-key';
 
 import type { BidDocumentType, SavedDocRef } from '../scraper/types';
-import { downloadDocument } from './download-document';
+import {
+  classifyDocumentSourceUrl,
+  formatDocumentLogLabel,
+  isSessionBoundDocumentUrl,
+  sanitizeErrorMessage,
+} from '../scraper/document-source-url';
+import {
+  CALEPROCURE_PLAYWRIGHT_USER_AGENT,
+  downloadCaleprocureDocumentsForBid,
+} from './download-caleprocure-document';
+import {
+  downloadDocument,
+  type DownloadDocumentResult,
+} from './download-document';
 
 const LOG_PREFIX = '[upload-documents]';
 
@@ -67,6 +82,7 @@ function toSavedDocRef(row: BidDocumentRow): SavedDocRef | null {
     documentId: row.id,
     bidId: row.bid_id,
     sourceUrl: row.source_url,
+    sourceUrlKind: classifyDocumentSourceUrl(row.source_url),
     name: documentNameFromRow(row),
     docType: row.document_type as BidDocumentType,
   };
@@ -148,6 +164,157 @@ async function markDocumentDownloadFailed(
     .eq('id', documentId);
 }
 
+async function loadBidEventUrls(bidIds: string[]): Promise<Map<string, string>> {
+  if (bidIds.length === 0) {
+    return new Map();
+  }
+
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('bids')
+    .select('id, source_url')
+    .in('id', bidIds);
+
+  if (error) {
+    throw new Error(`Failed to load bid event URLs: ${error.message}`);
+  }
+
+  return new Map(
+    (data ?? []).map((row) => [row.id as string, row.source_url as string]),
+  );
+}
+
+function groupDocumentsByBid(documents: SavedDocRef[]): Map<string, SavedDocRef[]> {
+  const grouped = new Map<string, SavedDocRef[]>();
+
+  for (const document of documents) {
+    const existing = grouped.get(document.bidId) ?? [];
+    existing.push(document);
+    grouped.set(document.bidId, existing);
+  }
+
+  return grouped;
+}
+
+async function uploadDownloadedDocument(
+  document: SavedDocRef,
+  download: DownloadDocumentResult,
+): Promise<{
+  ok: true;
+  r2Key: string;
+  sizeBytes: number;
+} | {
+  ok: false;
+  error: string;
+  skipped?: boolean;
+}> {
+  const label = formatDocumentLogLabel({
+    documentId: document.documentId,
+    bidId: document.bidId,
+    name: document.name,
+    sourceUrl: document.sourceUrl,
+  });
+
+  const supabase = createAdminClient();
+  const { data: existing, error: lookupError } = await supabase
+    .from('bid_documents')
+    .select('r2_key')
+    .eq('id', document.documentId)
+    .single();
+
+  if (lookupError) {
+    return {
+      ok: false,
+      error: `Failed to look up ${label}: ${lookupError.message}`,
+    };
+  }
+
+  if (existing?.r2_key) {
+    console.log(`${LOG_PREFIX} Skipping ${label} — already stored at ${existing.r2_key}`);
+    return { ok: false, error: 'already uploaded', skipped: true };
+  }
+
+  if (!download.ok) {
+    await markDocumentDownloadFailed(document.documentId, download.error);
+    return {
+      ok: false,
+      error: `Download failed for ${label}: ${download.error}`,
+    };
+  }
+
+  const fileName = `${sanitizeFilename(document.name)}.pdf`;
+  const r2Key = buildCaltransStorageKey(
+    document.bidId,
+    document.documentId,
+    document.name,
+  );
+  const sha256 = createHash('sha256').update(download.buffer).digest('hex');
+
+  await uploadPdfToR2({
+    key: r2Key,
+    body: download.buffer,
+    metadata: {
+      'document-id': document.documentId,
+      'bid-id': document.bidId,
+      'doc-type': document.docType,
+    },
+  });
+
+  const updateError = await markDocumentUploaded(
+    document,
+    r2Key,
+    download.sizeBytes,
+    sha256,
+    fileName,
+  );
+
+  if (updateError) {
+    return { ok: false, error: updateError };
+  }
+
+  console.log(
+    `${LOG_PREFIX} Uploaded ${label} -> ${r2Key} (${download.sizeBytes} bytes)`,
+  );
+
+  return { ok: true, r2Key, sizeBytes: download.sizeBytes };
+}
+
+async function downloadCaleprocureBatch(
+  context: BrowserContext,
+  bidId: string,
+  eventPageUrl: string,
+  documents: SavedDocRef[],
+): Promise<Map<string, DownloadDocumentResult>> {
+  if (!/caleprocure\.ca\.gov\/event\//i.test(eventPageUrl)) {
+    const error = failureForAll(
+      documents,
+      `bid ${bidId} event URL is not a CaleProcure event page: ${eventPageUrl}`,
+    );
+    return error;
+  }
+
+  return downloadCaleprocureDocumentsForBid(
+    context,
+    eventPageUrl,
+    documents.map((document) => ({
+      documentId: document.documentId,
+      name: document.name,
+      sourceUrl: document.sourceUrl,
+    })),
+  );
+}
+
+function failureForAll(
+  documents: SavedDocRef[],
+  error: string,
+): Map<string, DownloadDocumentResult> {
+  const results = new Map<string, DownloadDocumentResult>();
+  for (const document of documents) {
+    results.set(document.documentId, { ok: false, error });
+  }
+  return results;
+}
+
 export async function uploadDocuments(
   documents: SavedDocRef[],
 ): Promise<UploadDocumentsResult> {
@@ -159,92 +326,153 @@ export async function uploadDocuments(
 
   console.log(`${LOG_PREFIX} Processing ${documents.length} document(s)...`);
 
-  for (const document of documents) {
-    const label = `document ${document.documentId} (${document.sourceUrl})`;
+  const regularDocuments = documents.filter(
+    (document) => !isSessionBoundDocumentUrl(document.sourceUrl),
+  );
+  const caleprocureDocuments = documents.filter((document) =>
+    isSessionBoundDocumentUrl(document.sourceUrl),
+  );
 
-    try {
-      const supabase = createAdminClient();
-      const { data: existing, error: lookupError } = await supabase
-        .from('bid_documents')
-        .select('r2_key')
-        .eq('id', document.documentId)
-        .single();
+  const playwrightResources: {
+    browser: Awaited<ReturnType<typeof chromium.launch>> | null;
+    context: BrowserContext | null;
+  } = { browser: null, context: null };
 
-      if (lookupError) {
-        documents_failed += 1;
-        const message = `Failed to look up ${label}: ${lookupError.message}`;
-        console.log(`${LOG_PREFIX} ${message}`);
-        errors.push(message);
-        continue;
-      }
-
-      if (existing?.r2_key) {
-        documents_skipped += 1;
-        console.log(`${LOG_PREFIX} Skipping ${label} — already stored at ${existing.r2_key}`);
-        continue;
-      }
-
-      const download = await downloadDocument(document.sourceUrl);
-      if (!download.ok) {
-        documents_failed += 1;
-        const message = `Download failed for ${label}: ${download.error}`;
-        console.log(`${LOG_PREFIX} ${message}`);
-        errors.push(message);
-        await markDocumentDownloadFailed(document.documentId, download.error);
-        continue;
-      }
-
-      const fileName = `${sanitizeFilename(document.name)}.pdf`;
-      const r2Key = buildCaltransStorageKey(
-        document.bidId,
-        document.documentId,
-        document.name,
-      );
-      const sha256 = createHash('sha256').update(download.buffer).digest('hex');
-
-      await uploadPdfToR2({
-        key: r2Key,
-        body: download.buffer,
-        metadata: {
-          'document-id': document.documentId,
-          'bid-id': document.bidId,
-          'doc-type': document.docType,
+  const ensurePlaywrightContext = async (): Promise<BrowserContext> => {
+    if (!playwrightResources.context) {
+      console.log(`${LOG_PREFIX} Launching Playwright for CaleProcure PDF downloads...`);
+      playwrightResources.browser = await chromium.launch({
+        headless: true,
+        args: ['--disable-blink-features=AutomationControlled'],
+      });
+      playwrightResources.context = await playwrightResources.browser.newContext({
+        userAgent: CALEPROCURE_PLAYWRIGHT_USER_AGENT,
+        locale: 'en-US',
+        viewport: { width: 1280, height: 720 },
+        acceptDownloads: true,
+        extraHTTPHeaders: {
+          'Accept-Language': 'en-US,en;q=0.9',
         },
       });
+    }
 
-      const updateError = await markDocumentUploaded(
-        document,
-        r2Key,
-        download.sizeBytes,
-        sha256,
-        fileName,
-      );
+    return playwrightResources.context;
+  };
 
-      if (updateError) {
+  try {
+    for (const document of regularDocuments) {
+      try {
+        const download = await downloadDocument(document.sourceUrl);
+        const result = await uploadDownloadedDocument(document, download);
+
+        if (result.ok) {
+          documents_uploaded += 1;
+          uploadedDocs.push({
+            documentId: document.documentId,
+            bidId: document.bidId,
+            r2Key: result.r2Key,
+            sizeBytes: result.sizeBytes,
+          });
+          continue;
+        }
+
+        if (result.skipped) {
+          documents_skipped += 1;
+          continue;
+        }
+
         documents_failed += 1;
-        console.log(`${LOG_PREFIX} ${updateError}`);
-        errors.push(updateError);
-        continue;
+        console.log(`${LOG_PREFIX} ${result.error}`);
+        errors.push(sanitizeErrorMessage(result.error));
+      } catch (err) {
+        documents_failed += 1;
+        const message = `Unexpected error for document ${document.documentId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`;
+        console.log(`${LOG_PREFIX} ${message}`);
+        errors.push(sanitizeErrorMessage(message));
       }
+    }
 
-      documents_uploaded += 1;
-      uploadedDocs.push({
-        documentId: document.documentId,
-        bidId: document.bidId,
-        r2Key,
-        sizeBytes: download.sizeBytes,
-      });
+    if (caleprocureDocuments.length > 0) {
+      const bidEventUrls = await loadBidEventUrls([
+        ...new Set(caleprocureDocuments.map((document) => document.bidId)),
+      ]);
+      const grouped = groupDocumentsByBid(caleprocureDocuments);
+      const context = await ensurePlaywrightContext();
 
-      console.log(
-        `${LOG_PREFIX} Uploaded ${label} -> ${r2Key} (${download.sizeBytes} bytes)`,
-      );
-    } catch (err) {
-      documents_failed += 1;
-      const message = `Unexpected error for ${label}: ${
-        err instanceof Error ? err.message : String(err)
-      }`;
-      console.log(`${LOG_PREFIX} ${message}`);
-      errors.push(message);
+      for (const [bidId, bidDocuments] of grouped) {
+        const eventPageUrl = bidEventUrls.get(bidId);
+        if (!eventPageUrl) {
+          for (const document of bidDocuments) {
+            documents_failed += 1;
+            const message = `Missing bid event URL for bid ${bidId} (document ${document.documentId})`;
+            console.log(`${LOG_PREFIX} ${message}`);
+            errors.push(sanitizeErrorMessage(message));
+            await markDocumentDownloadFailed(document.documentId, message);
+          }
+          continue;
+        }
+
+        let downloads: Map<string, DownloadDocumentResult>;
+        try {
+          downloads = await downloadCaleprocureBatch(
+            context,
+            bidId,
+            eventPageUrl,
+            bidDocuments,
+          );
+        } catch (err) {
+          const message = `CaleProcure download batch failed for bid ${bidId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`;
+          console.log(`${LOG_PREFIX} ${message}`);
+          downloads = failureForAll(bidDocuments, message);
+        }
+
+        for (const document of bidDocuments) {
+          try {
+            const download =
+              downloads.get(document.documentId) ??
+              ({ ok: false, error: 'no download result returned' } as const);
+            const result = await uploadDownloadedDocument(document, download);
+
+            if (result.ok) {
+              documents_uploaded += 1;
+              uploadedDocs.push({
+                documentId: document.documentId,
+                bidId: document.bidId,
+                r2Key: result.r2Key,
+                sizeBytes: result.sizeBytes,
+              });
+              continue;
+            }
+
+            if (result.skipped) {
+              documents_skipped += 1;
+              continue;
+            }
+
+            documents_failed += 1;
+            console.log(`${LOG_PREFIX} ${result.error}`);
+            errors.push(sanitizeErrorMessage(result.error));
+          } catch (err) {
+            documents_failed += 1;
+            const message = `Unexpected error for document ${document.documentId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`;
+            console.log(`${LOG_PREFIX} ${message}`);
+            errors.push(sanitizeErrorMessage(message));
+          }
+        }
+      }
+    }
+  } finally {
+    if (playwrightResources.context) {
+      await playwrightResources.context.close();
+    }
+    if (playwrightResources.browser) {
+      await playwrightResources.browser.close();
     }
   }
 
