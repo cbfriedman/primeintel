@@ -2,9 +2,10 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
 import { downloadPdfFromR2 } from '@/lib/r2/client';
+import type { TextQuality } from '@/types/bid';
 
 const require = createRequire(import.meta.url);
-const pdfjs = require('pdfjs-dist/legacy/build/pdf.js') as typeof import('pdfjs-dist/legacy/build/pdf.js');
+const pdfjs = require('pdfjs-dist/legacy/build/pdf.js') as typeof import('pdfjs-dist');
 
 pdfjs.GlobalWorkerOptions.workerSrc = join(
   dirname(require.resolve('pdfjs-dist/package.json')),
@@ -18,8 +19,6 @@ export type ExtractedPage = {
   text: string;
   charCount: number;
 };
-
-export type TextQuality = 'good' | 'medium' | 'poor';
 
 export type PdfExtractionInput = {
   documentId: string;

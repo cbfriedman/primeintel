@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getR2BucketName } from '@/lib/r2/client';
+import type { TextQuality } from '@/types/bid';
 
 import {
   extractPdfText,
@@ -26,7 +27,7 @@ export type TextExtractionRunResult = {
     documentId: string;
     bidId: string;
     pageCount: number;
-    textQuality: string;
+    textQuality: TextQuality;
     requiresOcr: boolean;
   }>;
 };
@@ -88,17 +89,22 @@ export async function loadPendingExtractionDocuments(
 async function markDocumentProcessing(documentId: string): Promise<string | null> {
   const supabase = createAdminClient();
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('bid_documents')
     .update({
       text_extraction_status: 'processing',
       extraction_error: null,
     })
     .eq('id', documentId)
-    .eq('text_extraction_status', 'pending');
+    .eq('text_extraction_status', 'pending')
+    .select('id');
 
   if (error) {
     return `Failed to mark document ${documentId} as processing: ${error.message}`;
+  }
+
+  if (!data || data.length === 0) {
+    return `Document ${documentId} is not pending (another worker may have claimed it)`;
   }
 
   return null;
