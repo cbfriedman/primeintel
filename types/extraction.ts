@@ -124,6 +124,7 @@ export type AIExtractionRun = {
 export type ManualReview = {
   id: string;
   bid_id: string;
+  comparison_id: string | null;
   assigned_to_user_id: string | null;
   status: ManualReviewStatus;
   priority: ManualReviewPriority;
