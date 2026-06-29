@@ -65,13 +65,26 @@ export async function writeBidFieldsFromComparison(options: {
   const estimate = findProposed(fc, 'engineers_estimate_cents');
   if (estimate !== null) updates.engineers_estimate_cents = estimate;
 
-  const bidBondPercent = parseBondPercent(findProposed(fc, 'bid_bond'));
+  // Bid cap — use estimated_cost_max when no engineer's estimate
+  const bidCap = findProposed(fc, 'estimated_cost_max_cents');
+  if (bidCap !== null) updates.bid_cap_cents = bidCap;
+
+  // Bid security — store raw text ("10% bid bond", "Not Required", etc.)
+  const bidSecurityRaw = findProposed(fc, 'bid_bond') ?? claudeFields.bid_bond?.value ?? null;
+  if (typeof bidSecurityRaw === 'string') updates.bid_security_text = bidSecurityRaw;
+  const bidBondPercent = parseBondPercent(bidSecurityRaw);
   if (bidBondPercent !== null) updates.bid_bond_percent = bidBondPercent;
 
-  const perfBondRequired = parseBondRequired(findProposed(fc, 'performance_bond'));
+  // Performance & Payment Bonds — combined field, raw text, prefer performance bond value
+  const perfBondRaw = findProposed(fc, 'performance_bond') ?? claudeFields.performance_bond?.value ?? null;
+  const payBondRaw  = findProposed(fc, 'payment_bond')     ?? claudeFields.payment_bond?.value  ?? null;
+  const perfPayText = (typeof perfBondRaw === 'string' ? perfBondRaw : null)
+                   ?? (typeof payBondRaw  === 'string' ? payBondRaw  : null);
+  if (perfPayText !== null) updates.perf_payment_bond_text = perfPayText;
+  // Keep legacy booleans populated for any existing queries
+  const perfBondRequired = parseBondRequired(perfBondRaw);
   if (perfBondRequired !== null) updates.performance_bond_required = perfBondRequired;
-
-  const payBondRequired = parseBondRequired(findProposed(fc, 'payment_bond'));
+  const payBondRequired = parseBondRequired(payBondRaw);
   if (payBondRequired !== null) updates.payment_bond_required = payBondRequired;
 
   const liquidatedDamages = findProposed(fc, 'liquidated_damages');
@@ -85,12 +98,19 @@ export async function writeBidFieldsFromComparison(options: {
   );
   if (duration !== null) updates.project_duration = duration;
 
-  // Requirements
-  const licenseReqs = findProposed(fc, 'license_requirements');
+  // Requirements — fall back to Claude direct when comparison conflicts on text verbosity
+  const licenseReqs = findProposed(fc, 'license_requirements') ?? claudeFields.license_requirements?.value ?? null;
   if (typeof licenseReqs === 'string') updates.license_requirements = licenseReqs;
+
+  // Prevailing wage — boolean, both AIs usually agree exactly
+  const prevailingWage = findProposed(fc, 'prevailing_wage_required') ?? claudeFields.prevailing_wage_required?.value ?? null;
+  if (typeof prevailingWage === 'boolean') updates.prevailing_wage_required = prevailingWage;
 
   const dbeGoal = findProposed(fc, 'dbe_goal_percent');
   if (typeof dbeGoal === 'number') updates.dbe_goal_percent = dbeGoal;
+
+  const dvbe = findProposed(fc, 'dvbe_percentage') ?? claudeFields.dvbe_percentage?.value ?? null;
+  if (typeof dvbe === 'number') updates.dvbe_percent = dvbe;
 
   // Contact — not_comparable in comparison engine, use Claude directly
   const contactName = claudeFields.contact_name?.value ?? null;

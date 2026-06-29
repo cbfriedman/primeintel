@@ -38,9 +38,14 @@ export type Bid = {
   engineers_estimate_cents: number | null;
   license_requirements: string | null;
   dbe_goal_percent: number | null;
+  dvbe_percent: number | null;
   bid_bond_percent: number | null;
+  bid_security_text: string | null;
   payment_bond_required: boolean | null;
   performance_bond_required: boolean | null;
+  perf_payment_bond_text: string | null;
+  prevailing_wage_required: boolean | null;
+  bid_cap_cents: number | null;
   liquidated_damages: string | null;
   project_duration: string | null;
   contact_name: string | null;

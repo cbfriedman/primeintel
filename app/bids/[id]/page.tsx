@@ -168,9 +168,11 @@ export default async function BidDetailPage({
           <p className="mt-1 text-sm font-medium text-zinc-900">{formatDate(bid.bid_date)}</p>
         </div>
         <div className="rounded-lg border border-zinc-200 bg-white px-4 py-3">
-          <p className="text-xs text-zinc-500">Est. Value</p>
+          <p className="text-xs text-zinc-500">
+            {bid.engineers_estimate_cents !== null ? 'Est. Value' : bid.bid_cap_cents !== null ? 'Bid Cap' : 'Est. Value'}
+          </p>
           <p className="mt-1 text-sm font-medium text-zinc-900">
-            {formatEstimate(bid.engineers_estimate_cents)}
+            {formatEstimate(bid.engineers_estimate_cents ?? bid.bid_cap_cents)}
           </p>
         </div>
         <div className="rounded-lg border border-zinc-200 bg-white px-4 py-3">
@@ -202,15 +204,26 @@ export default async function BidDetailPage({
           <Field label="Bid Date"        value={formatDate(bid.bid_date)} />
           <Field label="Pre-bid Meeting" value={formatDate(bid.prebid_meeting_at)} />
           <Field label="Questions Due"   value={formatDate(bid.question_deadline_at)} />
-          <Field label="Engineers Est."  value={formatEstimate(bid.engineers_estimate_cents)} />
+          <Field
+            label={bid.engineers_estimate_cents !== null ? 'Engineers Est.' : bid.bid_cap_cents !== null ? 'Bid Cap' : 'Engineers Est.'}
+            value={formatEstimate(bid.engineers_estimate_cents ?? bid.bid_cap_cents)}
+          />
           <Field label="Project Duration" value={bid.project_duration} />
           <Field label="Trade"           value={bid.trade} />
-          <Field label="Bid Bond"        value={formatPercent(bid.bid_bond_percent)} />
-          <Field label="Performance Bond" value={formatBoolean(bid.performance_bond_required)} />
-          <Field label="Payment Bond"    value={formatBoolean(bid.payment_bond_required)} />
-          <Field label="DBE Goal"        value={formatPercent(bid.dbe_goal_percent)} />
+          <Field label="Bid Security"    value={bid.bid_security_text ?? formatPercent(bid.bid_bond_percent)} />
+          <Field label="Perf. & Payment Bonds" value={bid.perf_payment_bond_text} />
+          <Field
+            label="DBE / DVBE Goal"
+            value={
+              bid.dbe_goal_percent !== null
+                ? formatPercent(bid.dbe_goal_percent)
+                : bid.dvbe_percent !== null
+                  ? `${bid.dvbe_percent}% DVBE`
+                  : null
+            }
+          />
           <Field label="Liquidated Damages" value={bid.liquidated_damages} />
-          <Field label="Prevailing Wage" value="—" />
+          <Field label="Prevailing Wage" value={formatBoolean(bid.prevailing_wage_required)} />
         </dl>
 
         {bid.license_requirements && (
