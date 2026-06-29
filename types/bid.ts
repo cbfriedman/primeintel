@@ -41,6 +41,7 @@ export type Bid = {
   bid_bond_percent: number | null;
   payment_bond_required: boolean | null;
   performance_bond_required: boolean | null;
+  prevailing_wage_required: boolean | null;
   liquidated_damages: string | null;
   project_duration: string | null;
   contact_name: string | null;

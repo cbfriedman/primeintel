@@ -68,10 +68,13 @@ export async function writeBidFieldsFromComparison(options: {
   const bidBondPercent = parseBondPercent(findProposed(fc, 'bid_bond'));
   if (bidBondPercent !== null) updates.bid_bond_percent = bidBondPercent;
 
-  const perfBondRequired = parseBondRequired(findProposed(fc, 'performance_bond'));
+  // For bond/boolean fields, fall back to Claude's direct value when comparison conflicts on text
+  const perfBondRaw = findProposed(fc, 'performance_bond') ?? claudeFields.performance_bond?.value ?? null;
+  const perfBondRequired = parseBondRequired(perfBondRaw);
   if (perfBondRequired !== null) updates.performance_bond_required = perfBondRequired;
 
-  const payBondRequired = parseBondRequired(findProposed(fc, 'payment_bond'));
+  const payBondRaw = findProposed(fc, 'payment_bond') ?? claudeFields.payment_bond?.value ?? null;
+  const payBondRequired = parseBondRequired(payBondRaw);
   if (payBondRequired !== null) updates.payment_bond_required = payBondRequired;
 
   const liquidatedDamages = findProposed(fc, 'liquidated_damages');
@@ -85,9 +88,13 @@ export async function writeBidFieldsFromComparison(options: {
   );
   if (duration !== null) updates.project_duration = duration;
 
-  // Requirements
-  const licenseReqs = findProposed(fc, 'license_requirements');
+  // Requirements — fall back to Claude direct when comparison conflicts on text verbosity
+  const licenseReqs = findProposed(fc, 'license_requirements') ?? claudeFields.license_requirements?.value ?? null;
   if (typeof licenseReqs === 'string') updates.license_requirements = licenseReqs;
+
+  // Prevailing wage — boolean, both AIs usually agree exactly
+  const prevailingWage = findProposed(fc, 'prevailing_wage_required') ?? claudeFields.prevailing_wage_required?.value ?? null;
+  if (typeof prevailingWage === 'boolean') updates.prevailing_wage_required = prevailingWage;
 
   const dbeGoal = findProposed(fc, 'dbe_goal_percent');
   if (typeof dbeGoal === 'number') updates.dbe_goal_percent = dbeGoal;

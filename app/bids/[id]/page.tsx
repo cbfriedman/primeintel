@@ -210,7 +210,7 @@ export default async function BidDetailPage({
           <Field label="Payment Bond"    value={formatBoolean(bid.payment_bond_required)} />
           <Field label="DBE Goal"        value={formatPercent(bid.dbe_goal_percent)} />
           <Field label="Liquidated Damages" value={bid.liquidated_damages} />
-          <Field label="Prevailing Wage" value="—" />
+          <Field label="Prevailing Wage" value={formatBoolean(bid.prevailing_wage_required)} />
         </dl>
 
         {bid.license_requirements && (
