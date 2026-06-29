@@ -65,15 +65,25 @@ export async function writeBidFieldsFromComparison(options: {
   const estimate = findProposed(fc, 'engineers_estimate_cents');
   if (estimate !== null) updates.engineers_estimate_cents = estimate;
 
-  const bidBondPercent = parseBondPercent(findProposed(fc, 'bid_bond'));
+  // Bid cap — use estimated_cost_max when no engineer's estimate
+  const bidCap = findProposed(fc, 'estimated_cost_max_cents');
+  if (bidCap !== null) updates.bid_cap_cents = bidCap;
+
+  // Bid security — store raw text ("10% bid bond", "Not Required", etc.)
+  const bidSecurityRaw = findProposed(fc, 'bid_bond') ?? claudeFields.bid_bond?.value ?? null;
+  if (typeof bidSecurityRaw === 'string') updates.bid_security_text = bidSecurityRaw;
+  const bidBondPercent = parseBondPercent(bidSecurityRaw);
   if (bidBondPercent !== null) updates.bid_bond_percent = bidBondPercent;
 
-  // For bond/boolean fields, fall back to Claude's direct value when comparison conflicts on text
+  // Performance & Payment Bonds — combined field, raw text, prefer performance bond value
   const perfBondRaw = findProposed(fc, 'performance_bond') ?? claudeFields.performance_bond?.value ?? null;
+  const payBondRaw  = findProposed(fc, 'payment_bond')     ?? claudeFields.payment_bond?.value  ?? null;
+  const perfPayText = (typeof perfBondRaw === 'string' ? perfBondRaw : null)
+                   ?? (typeof payBondRaw  === 'string' ? payBondRaw  : null);
+  if (perfPayText !== null) updates.perf_payment_bond_text = perfPayText;
+  // Keep legacy booleans populated for any existing queries
   const perfBondRequired = parseBondRequired(perfBondRaw);
   if (perfBondRequired !== null) updates.performance_bond_required = perfBondRequired;
-
-  const payBondRaw = findProposed(fc, 'payment_bond') ?? claudeFields.payment_bond?.value ?? null;
   const payBondRequired = parseBondRequired(payBondRaw);
   if (payBondRequired !== null) updates.payment_bond_required = payBondRequired;
 
