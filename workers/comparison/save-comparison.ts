@@ -14,6 +14,7 @@ import {
 } from './comparison-schema';
 import { loadEligiblePairs } from './load-extraction-pairs';
 import { scoreComparison } from './score-comparison';
+import { writeBidFieldsFromComparison } from './write-bid-fields';
 
 const LOG_PREFIX = '[save-comparison]';
 
@@ -343,6 +344,19 @@ export async function runComparison(
           errorMessage: 'Superseded by concurrent worker',
         });
         continue;
+      }
+
+      // Write consensus fields back to the bids table (best-effort, non-fatal)
+      try {
+        await writeBidFieldsFromComparison({
+          bidId: pair.bidId,
+          comparisonResult: validatedResult.data,
+          claudeFields: claudeValidated.data,
+        });
+      } catch (writeErr) {
+        console.log(
+          `${LOG_PREFIX} Warning: field write-back failed for bid ${pair.bidId}: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
+        );
       }
 
       if (validatedResult.data.manual_review_required) {
