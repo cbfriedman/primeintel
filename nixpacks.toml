@@ -1,0 +1,8 @@
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npx playwright install chromium --with-deps"]
+
+[start]
+cmd = "npx tsx workers/orchestrate.ts"
