@@ -25,7 +25,8 @@ export function loadEnvLocal(options: LoadEnvLocalOptions = {}): void {
   const envPath = resolve(process.cwd(), '.env.local');
 
   if (!existsSync(envPath)) {
-    if (options.required) {
+    // In production (Railway/Render), env vars are injected directly — no .env.local needed.
+    if (options.required && !process.env.NEXT_PUBLIC_SUPABASE_URL) {
       throw new Error(
         `Missing .env.local at ${envPath}. Create it in the project root with Supabase credentials before running worker CLI scripts.`,
       );

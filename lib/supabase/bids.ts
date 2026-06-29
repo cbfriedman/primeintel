@@ -1,4 +1,4 @@
-import type { Bid } from "@/types/bid";
+import type { Bid, BidDocument, BidRiskFlag } from "@/types/bid";
 import type { BidDbExtractionStatus } from "@/types/extraction";
 
 import { createAdminClient } from "./admin";
@@ -107,4 +107,36 @@ export async function getBidById(id: string): Promise<Bid | null> {
   }
 
   return data as Bid;
+}
+
+export async function getBidDocuments(bidId: string): Promise<BidDocument[]> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from("bid_documents")
+    .select("*")
+    .eq("bid_id", bidId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to fetch bid documents: ${error.message}`);
+  }
+
+  return (data ?? []) as BidDocument[];
+}
+
+export async function getBidRiskFlags(bidId: string): Promise<BidRiskFlag[]> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from("bid_risk_flags")
+    .select("*")
+    .eq("bid_id", bidId)
+    .order("severity", { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to fetch bid risk flags: ${error.message}`);
+  }
+
+  return (data ?? []) as BidRiskFlag[];
 }

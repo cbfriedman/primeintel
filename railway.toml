@@ -1,0 +1,7 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "npx tsx workers/orchestrate.ts"
+restartPolicyType = "always"
+restartPolicyMaxRetries = 10
