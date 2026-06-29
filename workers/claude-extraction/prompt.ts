@@ -21,6 +21,7 @@ Numeric rules:
 8. working_days and calendar_days are separate fields. Use only the type explicitly stated. If the document says "working days", use working_days. If "calendar days", use calendar_days. Do not populate both from one statement.
 9. engineers_estimate_cents is the engineer's pre-bid cost estimate, not a bid amount or contract award price.
 10. bid_bond, performance_bond, and payment_bond are three distinct fields. Extract each separately only when explicitly stated.
+11. liquidated_damages is the per-day penalty for late project completion — always expressed as a dollar amount per calendar day or working day (e.g. "$1,000 per calendar day"). Do NOT capture one-time administrative fees, re-bidding costs, or failure-to-commence penalties — those are not liquidated damages. If no per-day completion penalty is stated, return null.
 
 Date rules:
 11. All dates must be ISO 8601 format: YYYY-MM-DD.
