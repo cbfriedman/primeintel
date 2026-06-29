@@ -109,6 +109,9 @@ export async function writeBidFieldsFromComparison(options: {
   const dbeGoal = findProposed(fc, 'dbe_goal_percent');
   if (typeof dbeGoal === 'number') updates.dbe_goal_percent = dbeGoal;
 
+  const dvbe = findProposed(fc, 'dvbe_percentage') ?? claudeFields.dvbe_percentage?.value ?? null;
+  if (typeof dvbe === 'number') updates.dvbe_percent = dvbe;
+
   // Contact — not_comparable in comparison engine, use Claude directly
   const contactName = claudeFields.contact_name?.value ?? null;
   if (contactName) updates.contact_name = contactName;

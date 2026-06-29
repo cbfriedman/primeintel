@@ -212,7 +212,16 @@ export default async function BidDetailPage({
           <Field label="Trade"           value={bid.trade} />
           <Field label="Bid Security"    value={bid.bid_security_text ?? formatPercent(bid.bid_bond_percent)} />
           <Field label="Perf. & Payment Bonds" value={bid.perf_payment_bond_text} />
-          <Field label="DBE Goal"        value={formatPercent(bid.dbe_goal_percent)} />
+          <Field
+            label="DBE / DVBE Goal"
+            value={
+              bid.dbe_goal_percent !== null
+                ? formatPercent(bid.dbe_goal_percent)
+                : bid.dvbe_percent !== null
+                  ? `${bid.dvbe_percent}% DVBE`
+                  : null
+            }
+          />
           <Field label="Liquidated Damages" value={bid.liquidated_damages} />
           <Field label="Prevailing Wage" value={formatBoolean(bid.prevailing_wage_required)} />
         </dl>
