@@ -11,6 +11,7 @@ import { loadEnvLocal } from '../scraper/env';
 import { extractedFieldsSchema } from '../claude-extraction/schema';
 import { comparisonResultSchema } from './comparison-schema';
 import { writeBidFieldsFromComparison } from './write-bid-fields';
+import { writeRiskFlagsFromComparison } from './write-risk-flags';
 
 const LOG = (msg: string) => console.log(`[${new Date().toISOString()}] ${msg}`);
 
@@ -69,6 +70,16 @@ async function main(): Promise<void> {
         comparisonResult: compValidated.data,
         claudeFields: fieldsValidated.data,
       });
+
+      try {
+        await writeRiskFlagsFromComparison({
+          bidId: comp.bid_id,
+          claudeFields: fieldsValidated.data,
+        });
+      } catch (riskErr) {
+        LOG(`Warning: risk flag write-back failed for bid ${comp.bid_id}: ${riskErr instanceof Error ? riskErr.message : String(riskErr)}`);
+      }
+
       LOG(`Wrote fields for bid ${comp.bid_id}`);
       success++;
     } catch (err) {
