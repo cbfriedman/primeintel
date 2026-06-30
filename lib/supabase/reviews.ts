@@ -396,5 +396,32 @@ export async function patchReview(
     throw new Error(`Failed to update review: ${error.message}`);
   }
 
+  if (input.status === 'approved' || input.status === 'corrected') {
+    const bidUpdate: Record<string, unknown> = {
+      extraction_status: 'completed',
+      manual_review_required: false,
+      updated_at: new Date().toISOString(),
+      ...input.corrected_fields,
+    };
+
+    const { error: bidError } = await supabase
+      .from('bids')
+      .update(bidUpdate)
+      .eq('id', review.bid_id);
+
+    if (bidError) {
+      throw new Error(`Failed to apply review resolution to bid: ${bidError.message}`);
+    }
+  } else if (input.status === 'failed') {
+    const { error: bidError } = await supabase
+      .from('bids')
+      .update({ extraction_status: 'failed', updated_at: new Date().toISOString() })
+      .eq('id', review.bid_id);
+
+    if (bidError) {
+      throw new Error(`Failed to mark bid as failed: ${bidError.message}`);
+    }
+  }
+
   return data as ManualReview;
 }
