@@ -14,6 +14,15 @@ export default async function SettingsPage() {
     ? (prefs.min_engineers_estimate_cents / 100).toFixed(0)
     : '';
 
+  // Forces remount after save — uncontrolled inputs (defaultValue) don't update on reconciliation
+  const formKey = [
+    prefs?.alert_frequency ?? '',
+    prefs?.email_alerts_enabled ?? '',
+    prefs?.min_engineers_estimate_cents ?? '',
+    prefs?.preferred_counties.join(',') ?? '',
+    prefs?.preferred_trades.join(',') ?? '',
+  ].join('|');
+
   return (
     <div className="max-w-xl">
       <div className="mb-6">
@@ -23,7 +32,7 @@ export default async function SettingsPage() {
         </p>
       </div>
 
-      <form action={savePreferences} className="space-y-6">
+      <form key={formKey} action={savePreferences} className="space-y-6">
         <div className="rounded-lg border border-zinc-200 bg-white px-6 py-5 space-y-5">
 
           {/* Counties */}
