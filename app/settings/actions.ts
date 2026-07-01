@@ -4,10 +4,15 @@ import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { upsertPreferences } from '@/lib/supabase/preferences';
 
-export async function savePreferences(formData: FormData) {
+export type SavePreferencesState = { ok: boolean; error?: string } | null;
+
+export async function savePreferences(
+  _prevState: SavePreferencesState,
+  formData: FormData,
+): Promise<SavePreferencesState> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return;
+  if (!user) return { ok: false, error: 'Not signed in.' };
 
   const countiesRaw = (formData.get('preferred_counties') as string) ?? '';
   const tradesRaw = (formData.get('preferred_trades') as string) ?? '';
@@ -29,13 +34,18 @@ export async function savePreferences(formData: FormData) {
     ? Math.round(parseFloat(minEstimateRaw) * 100)
     : null;
 
-  await upsertPreferences(user.id, user.email ?? '', {
-    preferred_counties,
-    preferred_trades,
-    min_engineers_estimate_cents,
-    email_alerts_enabled: emailEnabled,
-    alert_frequency: frequency as 'instant' | 'daily' | 'weekly' | 'off',
-  });
+  try {
+    await upsertPreferences(user.id, user.email ?? '', {
+      preferred_counties,
+      preferred_trades,
+      min_engineers_estimate_cents,
+      email_alerts_enabled: emailEnabled,
+      alert_frequency: frequency as 'instant' | 'daily' | 'weekly' | 'off',
+    });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to save preferences.' };
+  }
 
   revalidatePath('/settings');
+  return { ok: true };
 }
