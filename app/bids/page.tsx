@@ -81,7 +81,7 @@ export default async function BidFeedPage({
     total = bids.length;
     savedIds = new Set(bids.map((b) => b.id));
   } else {
-    const filters: Parameters<typeof getBids>[0] = { limit: 50, upcoming_only: true };
+    const filters: Parameters<typeof getBids>[0] = { limit: 50 };
     if (activeTab !== 'all') {
       filters.extraction_status = activeTab as BidDbExtractionStatus;
     }
@@ -98,8 +98,8 @@ export default async function BidFeedPage({
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-zinc-900">Bid Feed</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          {total} upcoming bid{total !== 1 ? 's' : ''}
-          {activeTab === 'saved' ? ' saved' : ''}
+          {total} bid{total !== 1 ? 's' : ''}
+          {activeTab === 'saved' ? ' saved' : ' scraped'}
         </p>
       </div>
 
