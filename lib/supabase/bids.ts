@@ -38,6 +38,7 @@ export type BidFilters = {
   extraction_status?: BidDbExtractionStatus;
   manual_review_required?: boolean;
   upcoming_only?: boolean;
+  expired_only?: boolean;
   limit?: number;
   offset?: number;
 };
@@ -63,7 +64,7 @@ export async function getBids(
 ): Promise<{ bids: Bid[]; total: number }> {
   const supabase = createAdminClient();
 
-  const { county, trade, extraction_status, manual_review_required, upcoming_only } = filters;
+  const { county, trade, extraction_status, manual_review_required, upcoming_only, expired_only } = filters;
   const limit = Math.min(filters.limit ?? 20, 100);
   const offset = filters.offset ?? 0;
 
@@ -84,6 +85,10 @@ export async function getBids(
   if (upcoming_only) {
     const today = new Date().toISOString().split("T")[0];
     query = query.or(`bid_date.gte.${today},bid_date.is.null`);
+  }
+  if (expired_only) {
+    const today = new Date().toISOString().split("T")[0];
+    query = query.lt("bid_date", today);
   }
 
   const { data, error, count } = await query;
