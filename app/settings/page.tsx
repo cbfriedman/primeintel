@@ -10,6 +10,16 @@ export default async function SettingsPage() {
 
   const prefs = user ? await getPreferences(user.id) : null;
 
+  // Changes when saved prefs change → remounts PreferencesForm so
+  // defaultValue is re-applied (uncontrolled inputs ignore prop updates)
+  const formKey = [
+    prefs?.alert_frequency ?? '',
+    String(prefs?.email_alerts_enabled ?? ''),
+    String(prefs?.min_engineers_estimate_cents ?? ''),
+    prefs?.preferred_counties.join(',') ?? '',
+    prefs?.preferred_trades.join(',') ?? '',
+  ].join('|');
+
   return (
     <div className="max-w-xl">
       <div className="mb-6">
@@ -19,7 +29,7 @@ export default async function SettingsPage() {
         </p>
       </div>
 
-      <PreferencesForm prefs={prefs} userEmail={user?.email ?? ''} />
+      <PreferencesForm key={formKey} prefs={prefs} userEmail={user?.email ?? ''} />
     </div>
   );
 }
