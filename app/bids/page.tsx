@@ -9,7 +9,7 @@ import { BookmarkButton } from '@/components/bids/BookmarkButton';
 import type { BidDbExtractionStatus } from '@/types/extraction';
 import type { Bid } from '@/types/bid';
 
-type ActiveTab = BidDbExtractionStatus | 'all' | 'saved';
+type ActiveTab = BidDbExtractionStatus | 'all' | 'saved' | 'expired';
 
 const TABS: { label: string; value: ActiveTab }[] = [
   { label: 'All',          value: 'all' },
@@ -18,6 +18,7 @@ const TABS: { label: string; value: ActiveTab }[] = [
   { label: 'Completed',    value: 'completed' },
   { label: 'Processing',   value: 'processing' },
   { label: 'Failed',       value: 'failed' },
+  { label: 'Expired',      value: 'expired' },
 ];
 
 const STATUS_CONFIG: Record<BidDbExtractionStatus, { label: string; className: string }> = {
@@ -82,8 +83,13 @@ export default async function BidFeedPage({
     savedIds = new Set(bids.map((b) => b.id));
   } else {
     const filters: Parameters<typeof getBids>[0] = { limit: 50 };
-    if (activeTab !== 'all') {
-      filters.extraction_status = activeTab as BidDbExtractionStatus;
+    if (activeTab === 'expired') {
+      filters.expired_only = true;
+    } else {
+      filters.upcoming_only = true;
+      if (activeTab !== 'all') {
+        filters.extraction_status = activeTab as BidDbExtractionStatus;
+      }
     }
     const result = await getBids(filters);
     bids = result.bids;
@@ -98,8 +104,10 @@ export default async function BidFeedPage({
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-zinc-900">Bid Feed</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          {total} bid{total !== 1 ? 's' : ''}
-          {activeTab === 'saved' ? ' saved' : ' scraped'}
+          {total}{' '}
+          {activeTab === 'expired' ? 'expired' : 'upcoming'}{' '}
+          bid{total !== 1 ? 's' : ''}
+          {activeTab === 'saved' ? ' saved' : ''}
         </p>
       </div>
 
