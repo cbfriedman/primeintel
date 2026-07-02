@@ -37,13 +37,14 @@ function StatusBadge({ status }: { status: BidDbExtractionStatus }) {
   );
 }
 
-function formatDate(iso: string | null): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
+function formatDate(iso: string | null): { text: string; urgent: boolean } {
+  if (!iso) return { text: '—', urgent: false };
+  const date = new Date(iso);
+  const daysUntil = Math.ceil((date.getTime() - Date.now()) / 86_400_000);
+  return {
+    text: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    urgent: daysUntil >= 0 && daysUntil <= 7,
+  };
 }
 
 function formatEstimate(cents: number | null): string {
@@ -80,7 +81,7 @@ export default async function BidFeedPage({
     total = bids.length;
     savedIds = new Set(bids.map((b) => b.id));
   } else {
-    const filters: Parameters<typeof getBids>[0] = { limit: 50 };
+    const filters: Parameters<typeof getBids>[0] = { limit: 50, upcoming_only: true };
     if (activeTab !== 'all') {
       filters.extraction_status = activeTab as BidDbExtractionStatus;
     }
@@ -97,8 +98,8 @@ export default async function BidFeedPage({
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-zinc-900">Bid Feed</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          {total} bid{total !== 1 ? 's' : ''}
-          {activeTab === 'saved' ? ' saved' : ' scraped'}
+          {total} upcoming bid{total !== 1 ? 's' : ''}
+          {activeTab === 'saved' ? ' saved' : ''}
         </p>
       </div>
 
@@ -171,8 +172,15 @@ export default async function BidFeedPage({
                   <td className="px-4 py-3 text-xs text-zinc-600">
                     {bid.county ?? '—'}
                   </td>
-                  <td className="px-4 py-3 text-xs text-zinc-600 whitespace-nowrap">
-                    {formatDate(bid.bid_date)}
+                  <td className="px-4 py-3 text-xs whitespace-nowrap">
+                    {(() => {
+                      const { text, urgent } = formatDate(bid.bid_date);
+                      return (
+                        <span className={urgent ? 'font-medium text-orange-600' : 'text-zinc-600'}>
+                          {text}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3 text-xs text-zinc-600 whitespace-nowrap">
                     {formatEstimate(bid.engineers_estimate_cents)}
