@@ -10,6 +10,8 @@
  *   4. Claude AI extraction
  *   5. OpenAI AI extraction
  *   6. Comparison + confidence scoring
+ *   7. Alert matching
+ *   8. Digest sending
  */
 
 import { loadEnvLocal } from './scraper/env';
@@ -20,6 +22,8 @@ import { runTextExtraction } from './text-extraction/save-extracted-text';
 import { runClaudeExtraction } from './claude-extraction/save-claude-extraction';
 import { runOpenAIExtraction } from './openai-extraction/save-openai-extraction';
 import { runComparison } from './comparison/save-comparison';
+import { matchAlertsForNewBids } from './alerts/match-alerts';
+import { sendPendingDigests } from './alerts/send-digests';
 
 // Batch sizes per pipeline run
 const LIMITS = {
@@ -28,6 +32,8 @@ const LIMITS = {
   claudeExtract:    5,
   openaiExtract:    5,
   comparison:      10,
+  alertMatching:   20,
+  digestSend:      50,
 };
 
 // How long to sleep between full pipeline runs (default: 2 hours)
@@ -110,6 +116,24 @@ async function runPipeline(): Promise<void> {
     LOG(
       `  Completed: ${compResult.comparisons_completed} | conflicts: ${compResult.conflict_total} | reviews: ${compResult.manual_review_required_total}`,
     );
+  }
+
+  // 7. Alert matching
+  const alertMatchResult = await step('Alert matching', () =>
+    matchAlertsForNewBids({ limit: LIMITS.alertMatching }),
+  );
+  if (alertMatchResult) {
+    LOG(
+      `  Bids processed: ${alertMatchResult.bids_processed} | alerts created: ${alertMatchResult.alerts_created} | failed: ${alertMatchResult.bids_failed}`,
+    );
+  }
+
+  // 8. Digest sending
+  const digestResult = await step('Digest sending', () =>
+    sendPendingDigests({ limit: LIMITS.digestSend }),
+  );
+  if (digestResult) {
+    LOG(`  Digests sent: ${digestResult.digests_sent} | failed: ${digestResult.digests_failed}`);
   }
 
   LOG(`=== Pipeline run complete. Next run in ${INTERVAL_MS / 60000} minutes ===\n`);

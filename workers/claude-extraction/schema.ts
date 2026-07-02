@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // Default versions — overridden at runtime by extraction-config.ts / env vars.
-export const PROMPT_VERSION = 'claude-extraction-v2';
+export const PROMPT_VERSION = 'claude-extraction-v3';
 export const SCHEMA_VERSION = 'extraction-schema-v2';
 export const EXTRACTION_TOOL_NAME = 'extract_bid_fields';
 

@@ -15,6 +15,7 @@ import {
 import { loadEligiblePairs } from './load-extraction-pairs';
 import { scoreComparison } from './score-comparison';
 import { writeBidFieldsFromComparison } from './write-bid-fields';
+import { writeRiskFlagsFromComparison } from './write-risk-flags';
 
 const LOG_PREFIX = '[save-comparison]';
 
@@ -356,6 +357,17 @@ export async function runComparison(
       } catch (writeErr) {
         console.log(
           `${LOG_PREFIX} Warning: field write-back failed for bid ${pair.bidId}: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
+        );
+      }
+
+      try {
+        await writeRiskFlagsFromComparison({
+          bidId: pair.bidId,
+          claudeFields: claudeValidated.data,
+        });
+      } catch (riskErr) {
+        console.log(
+          `${LOG_PREFIX} Warning: risk flag write-back failed for bid ${pair.bidId}: ${riskErr instanceof Error ? riskErr.message : String(riskErr)}`,
         );
       }
 

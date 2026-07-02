@@ -11,6 +11,17 @@ export type UserPreferences = {
 
 export type PreferencesInput = Partial<UserPreferences>;
 
+export type AlertRecipient = {
+  userId: string;
+  email: string;
+  preferredCounties: string[];
+  preferredTrades: string[];
+  minEngineersEstimateCents: number | null;
+  maxEngineersEstimateCents: number | null;
+  alertFrequency: 'instant' | 'daily' | 'weekly';
+  lastDigestSentAt: string | null;
+};
+
 async function ensurePublicUser(userId: string, email: string): Promise<void> {
   const supabase = createAdminClient();
   await supabase
@@ -66,4 +77,54 @@ export async function upsertPreferences(
   if (error) {
     throw new Error(`Failed to save preferences: ${error.message}`);
   }
+}
+
+function resolveJoin<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
+
+export async function getActiveAlertRecipients(): Promise<AlertRecipient[]> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('user_preferences')
+    .select(
+      `
+      user_id,
+      preferred_counties,
+      preferred_trades,
+      min_engineers_estimate_cents,
+      max_engineers_estimate_cents,
+      alert_frequency,
+      last_digest_sent_at,
+      users (
+        email
+      )
+    `,
+    )
+    .eq('email_alerts_enabled', true)
+    .neq('alert_frequency', 'off');
+
+  if (error) {
+    throw new Error(`Failed to fetch active alert recipients: ${error.message}`);
+  }
+
+  return (data ?? [])
+    .map((row) => {
+      const user = resolveJoin(row.users as { email: string } | { email: string }[] | null);
+      if (!user) return null;
+
+      return {
+        userId: row.user_id,
+        email: user.email,
+        preferredCounties: row.preferred_counties ?? [],
+        preferredTrades: row.preferred_trades ?? [],
+        minEngineersEstimateCents: row.min_engineers_estimate_cents ?? null,
+        maxEngineersEstimateCents: row.max_engineers_estimate_cents ?? null,
+        alertFrequency: row.alert_frequency as 'instant' | 'daily' | 'weekly',
+        lastDigestSentAt: row.last_digest_sent_at ?? null,
+      };
+    })
+    .filter((row): row is AlertRecipient => row !== null);
 }

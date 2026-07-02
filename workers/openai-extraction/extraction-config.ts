@@ -28,7 +28,7 @@ export function getOpenAIExtractionConfig(): OpenAIExtractionConfig {
     timeoutMs: readInt('OPENAI_EXTRACTION_TIMEOUT_MS', 90_000),
     maxRetries: readInt('OPENAI_EXTRACTION_MAX_RETRIES', 3),
     promptVersion:
-      process.env.OPENAI_EXTRACTION_PROMPT_VERSION?.trim() || 'openai-extraction-v1',
+      process.env.OPENAI_EXTRACTION_PROMPT_VERSION?.trim() || 'openai-extraction-v2',
     schemaVersion: SCHEMA_VERSION,
   };
 }
