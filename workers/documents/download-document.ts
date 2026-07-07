@@ -1,3 +1,5 @@
+import { withRetry } from '@/lib/retry';
+
 export type DownloadDocumentSuccess = {
   ok: true;
   buffer: Buffer;
@@ -134,6 +136,63 @@ export function isCaleprocureViewredirectUrl(sourceUrl: string): boolean {
   return /caleprocure\.ca\.gov.*viewredirect/i.test(sourceUrl);
 }
 
+class RetryableDownloadError extends Error {}
+
+async function attemptDownload(
+  sourceUrl: string,
+  maxBytes: number,
+): Promise<DownloadDocumentResult> {
+  let response: Response;
+
+  try {
+    response = await fetch(sourceUrl, {
+      headers: FETCH_HEADERS,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new RetryableDownloadError(`download failed: ${message}`);
+  }
+
+  if (!response.ok) {
+    const message = `HTTP ${response.status} ${response.statusText}`.trim();
+
+    if (response.status === 429 || response.status >= 500) {
+      throw new RetryableDownloadError(message);
+    }
+
+    return { ok: false, error: message };
+  }
+
+  const contentType = response.headers.get('content-type') ?? '';
+  const declaredLength = parseContentLengthHeader(
+    response.headers.get('content-length'),
+  );
+
+  if (declaredLength !== null && declaredLength > maxBytes) {
+    return {
+      ok: false,
+      error: `Content-Length ${declaredLength} exceeds maximum ${maxBytes} bytes`,
+    };
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const validationError = validateDownloadedPdf(buffer, contentType, maxBytes);
+
+  if (validationError) {
+    return { ok: false, error: validationError };
+  }
+
+  return {
+    ok: true,
+    buffer,
+    contentType: 'application/pdf',
+    sizeBytes: buffer.length,
+  };
+}
+
 export async function downloadDocument(sourceUrl: string): Promise<DownloadDocumentResult> {
   if (isCaleprocureViewredirectUrl(sourceUrl)) {
     return {
@@ -146,47 +205,13 @@ export async function downloadDocument(sourceUrl: string): Promise<DownloadDocum
   const maxBytes = getMaxDownloadBytes();
 
   try {
-    const response = await fetch(sourceUrl, {
-      headers: FETCH_HEADERS,
-      redirect: 'follow',
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    return await withRetry(() => attemptDownload(sourceUrl, maxBytes), {
+      maxAttempts: 3,
+      label: `PDF download (${sourceUrl})`,
+      isRetryable: (err) => err instanceof RetryableDownloadError,
     });
-
-    if (!response.ok) {
-      return {
-        ok: false,
-        error: `HTTP ${response.status} ${response.statusText}`.trim(),
-      };
-    }
-
-    const contentType = response.headers.get('content-type') ?? '';
-    const declaredLength = parseContentLengthHeader(
-      response.headers.get('content-length'),
-    );
-
-    if (declaredLength !== null && declaredLength > maxBytes) {
-      return {
-        ok: false,
-        error: `Content-Length ${declaredLength} exceeds maximum ${maxBytes} bytes`,
-      };
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const validationError = validateDownloadedPdf(buffer, contentType, maxBytes);
-
-    if (validationError) {
-      return { ok: false, error: validationError };
-    }
-
-    return {
-      ok: true,
-      buffer,
-      contentType: 'application/pdf',
-      sizeBytes: buffer.length,
-    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `download failed: ${message}` };
+    return { ok: false, error: message };
   }
 }

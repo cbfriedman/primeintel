@@ -17,7 +17,10 @@ function isRetryable(err: unknown): boolean {
   if (err instanceof APIError) {
     return err.status === 429 || (err.status !== undefined && err.status >= 500);
   }
-  return true; // network error or timeout
+  if (err instanceof Error && err.name === 'TimeoutError') {
+    return true;
+  }
+  return err instanceof TypeError; // network error
 }
 
 function jitteredDelay(baseMs: number): number {

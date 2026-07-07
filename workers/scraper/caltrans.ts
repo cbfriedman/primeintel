@@ -1,6 +1,7 @@
 import { parse } from 'node-html-parser';
 import { chromium } from 'playwright';
 
+import { withRetry } from '@/lib/retry';
 import type { CaltransScraperResult, NormalizedBidListing } from './types';
 
 const SOURCE = 'caltrans' as const;
@@ -234,7 +235,7 @@ function detectPagination(html: string): boolean {
 function warnIfPaginationDetected(html: string): void {
   if (detectPagination(html)) {
     console.log(
-      `${LOG_PREFIX} Warning: pagination appears to exist but is not handled yet. Only the first page will be scraped.`,
+      `${LOG_PREFIX} ALERT: pagination appears to exist but is not handled yet. Only the first page will be scraped.`,
     );
   }
 }
@@ -243,19 +244,21 @@ async function getHtmlViaFetch(): Promise<string | null> {
   console.log(`${LOG_PREFIX} Fetching via HTTP...`);
 
   try {
-    const response = await fetch(LISTING_URL, {
-      headers: FETCH_HEADERS,
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
+    return await withRetry(
+      async () => {
+        const response = await fetch(LISTING_URL, {
+          headers: FETCH_HEADERS,
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
 
-    if (!response.ok) {
-      console.log(
-        `${LOG_PREFIX} Fetch failed (HTTP ${response.status}). Falling back to Playwright...`,
-      );
-      return null;
-    }
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
 
-    return await response.text();
+        return await response.text();
+      },
+      { maxAttempts: 2, label: 'Caltrans listing fetch' },
+    );
   } catch (err) {
     if (err instanceof Error && err.name === 'TimeoutError') {
       console.log(
@@ -273,25 +276,33 @@ async function getHtmlViaFetch(): Promise<string | null> {
 }
 
 async function getHtmlViaPlaywright(): Promise<string> {
-  console.log(`${LOG_PREFIX} Launching Playwright (Chromium headless)...`);
+  return withRetry(
+    async () => {
+      console.log(`${LOG_PREFIX} Launching Playwright (Chromium headless)...`);
 
-  const browser = await chromium.launch({ headless: true });
-  let context;
+      const browser = await chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      });
+      let context;
 
-  try {
-    context = await browser.newContext({ userAgent: USER_AGENT });
-    const page = await context.newPage();
-    await page.goto(LISTING_URL, { timeout: 30000 });
-    await page.waitForSelector('table', { timeout: 20000 });
-    return await page.content();
-  } catch (err) {
-    throw new Error(
-      `Playwright navigation failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  } finally {
-    await context?.close();
-    await browser.close();
-  }
+      try {
+        context = await browser.newContext({ userAgent: USER_AGENT });
+        const page = await context.newPage();
+        await page.goto(LISTING_URL, { timeout: 30000 });
+        await page.waitForSelector('table', { timeout: 20000 });
+        return await page.content();
+      } catch (err) {
+        throw new Error(
+          `Playwright navigation failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        await context?.close();
+        await browser.close();
+      }
+    },
+    { maxAttempts: 2, label: 'Caltrans Playwright navigation' },
+  );
 }
 
 export async function scrapeCaltrans(): Promise<CaltransScraperResult> {

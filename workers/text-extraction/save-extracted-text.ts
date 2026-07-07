@@ -9,6 +9,7 @@ import {
 } from './extract-pdf-text';
 
 const LOG_PREFIX = '[save-extracted-text]';
+const STALE_PROCESSING_THRESHOLD_MINUTES = 10;
 
 export type PendingExtractionDocument = {
   documentId: string;
@@ -47,6 +48,26 @@ function formatPagesForStorage(pages: ExtractedPage[]): string {
   return pages
     .map((page) => `=== Page ${page.pageNumber} ===\n${page.text}`)
     .join('\n\n');
+}
+
+async function resetStaleProcessingRows(): Promise<void> {
+  const supabase = createAdminClient();
+  const threshold = new Date(
+    Date.now() - STALE_PROCESSING_THRESHOLD_MINUTES * 60 * 1000,
+  ).toISOString();
+
+  const { error } = await supabase
+    .from('bid_documents')
+    .update({
+      text_extraction_status: 'failed',
+      extraction_error: `Stale processing row reset after ${STALE_PROCESSING_THRESHOLD_MINUTES} minutes (worker likely crashed).`,
+    })
+    .eq('text_extraction_status', 'processing')
+    .lt('updated_at', threshold);
+
+  if (error) {
+    console.log(`${LOG_PREFIX} Warning: stale row reset failed: ${error.message}`);
+  }
 }
 
 export async function loadPendingExtractionDocuments(
@@ -154,6 +175,9 @@ export async function runTextExtraction(
   options: RunTextExtractionOptions = {},
 ): Promise<TextExtractionRunResult> {
   const limit = options.limit ?? 3;
+
+  await resetStaleProcessingRows();
+
   const documents = await loadPendingExtractionDocuments(limit);
   const errors: string[] = [];
   const extractedDocs: TextExtractionRunResult['extractedDocs'] = [];

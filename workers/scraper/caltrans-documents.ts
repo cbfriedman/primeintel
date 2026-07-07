@@ -1,6 +1,7 @@
 import { parse } from 'node-html-parser';
 import { chromium, type Browser, type BrowserContext } from 'playwright';
 
+import { withRetry } from '@/lib/retry';
 import type {
   BidDocumentType,
   ExtractDocumentsResult,
@@ -674,7 +675,7 @@ async function getDocumentsViaPlaywright(
 
       if (!hydration.hydrated) {
         console.log(
-          `${LOG_PREFIX} Bid ${bidId} (${pageUrl}): CaleProcure event page did not hydrate — eventName empty after ${CALEPROCURE_HYDRATION_TIMEOUT_MS}ms`,
+          `${LOG_PREFIX} ALERT: Bid ${bidId} (${pageUrl}): CaleProcure event page did not hydrate — eventName empty after ${CALEPROCURE_HYDRATION_TIMEOUT_MS}ms`,
         );
       }
 
@@ -755,7 +756,11 @@ export async function extractCaltransDocuments(
       console.log(`${LOG_PREFIX} Launching Playwright for document fallback...`);
       playwrightResources.browser = await chromium.launch({
         headless: true,
-        args: ['--disable-blink-features=AutomationControlled'],
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-blink-features=AutomationControlled',
+        ],
       });
       playwrightResources.context = await playwrightResources.browser.newContext({
         userAgent: USER_AGENT,
@@ -806,10 +811,17 @@ export async function extractCaltransDocuments(
 
           const playwrightContext = await ensureContext();
           try {
-            const playwrightResult = await getDocumentsViaPlaywright(
-              playwrightContext,
-              savedBid.sourceUrl,
-              savedBid.bidId,
+            const playwrightResult = await withRetry(
+              () =>
+                getDocumentsViaPlaywright(
+                  playwrightContext,
+                  savedBid.sourceUrl,
+                  savedBid.bidId,
+                ),
+              {
+                maxAttempts: 2,
+                label: `Playwright document discovery (bid ${savedBid.bidId})`,
+              },
             );
 
             if (playwrightResult.authWall) {
