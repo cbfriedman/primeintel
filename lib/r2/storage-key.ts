@@ -11,11 +11,21 @@ export function sanitizeFilename(name: string): string {
   return base.slice(0, MAX_FILENAME_LENGTH);
 }
 
-export function buildCaltransStorageKey(
+export function buildDocumentStorageKey(
+  sourceSlug: string,
   bidId: string,
   documentId: string,
   filename: string,
 ): string {
   const sanitized = sanitizeFilename(filename);
-  return `raw/caltrans/${bidId}/${documentId}-${sanitized}.pdf`;
+  return `raw/${sourceSlug}/${bidId}/${documentId}-${sanitized}.pdf`;
+}
+
+/** @deprecated Use buildDocumentStorageKey(sourceSlug, bidId, documentId, filename) */
+export function buildCaltransStorageKey(
+  bidId: string,
+  documentId: string,
+  filename: string,
+): string {
+  return buildDocumentStorageKey('caltrans', bidId, documentId, filename);
 }

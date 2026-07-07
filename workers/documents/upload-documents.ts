@@ -9,7 +9,7 @@ import {
   getStablePublicR2Url,
   uploadPdfToR2,
 } from '@/lib/r2/client';
-import { buildCaltransStorageKey, sanitizeFilename } from '@/lib/r2/storage-key';
+import { buildDocumentStorageKey, sanitizeFilename } from '@/lib/r2/storage-key';
 
 import type { BidDocumentType, SavedDocRef } from '../scraper/types';
 import {
@@ -243,7 +243,10 @@ async function uploadDownloadedDocument(
   }
 
   const fileName = `${sanitizeFilename(document.name)}.pdf`;
-  const r2Key = buildCaltransStorageKey(
+  // TODO(phase-b): join bids.source_name in loadPendingUploadDocuments and pass it here
+  // instead of hardcoding 'caltrans'. Safe for now — only one active source.
+  const r2Key = buildDocumentStorageKey(
+    'caltrans',
     document.bidId,
     document.documentId,
     document.name,

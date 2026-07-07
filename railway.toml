@@ -5,3 +5,6 @@ builder = "nixpacks"
 startCommand = "npx tsx workers/orchestrate.ts"
 restartPolicyType = "always"
 restartPolicyMaxRetries = 10
+
+# Worker service — not an HTTP server, no healthcheck endpoint.
+# Railway will keep it alive via process monitoring + restart policy.

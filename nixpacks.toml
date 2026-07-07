@@ -1,7 +1,12 @@
+[variables]
+NODE_ENV = "production"
+
 [phases.install]
 cmds = ["npm ci"]
 
 [phases.build]
+# Install Chromium + its OS dependencies for Playwright.
+# --with-deps handles the Linux system packages Railway's container needs.
 cmds = ["npx playwright install chromium --with-deps"]
 
 [start]

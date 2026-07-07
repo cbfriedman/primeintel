@@ -4,19 +4,21 @@
  * Deployed as a long-running service on Railway.
  *
  * Pipeline order:
- *   1. Scrape Caltrans bids + discover documents
- *   2. Download PDFs + upload to R2
- *   3. Extract text from PDFs
- *   4. Claude AI extraction
- *   5. OpenAI AI extraction
- *   6. Comparison + confidence scoring
- *   7. Alert matching
- *   8. Digest sending
+ *   1. Scrape Caltrans bids + discover documents (legacy path)
+ *   2. Scrape additional active sources via registry (new path)
+ *   3. Download PDFs + upload to R2
+ *   4. Extract text from PDFs
+ *   5. Claude AI extraction
+ *   6. OpenAI AI extraction
+ *   7. Comparison + confidence scoring
+ *   8. Alert matching
+ *   9. Digest sending
  */
 
 import { loadEnvLocal } from './scraper/env';
 import { saveCaltransBids } from './scraper/save-bids';
 import { saveCaltransDocuments } from './scraper/save-documents';
+import { runAdditionalSources } from './sources/run-sources';
 import { uploadPendingDocuments } from './documents/upload-documents';
 import { runTextExtraction } from './text-extraction/save-extracted-text';
 import { runClaudeExtraction } from './claude-extraction/save-claude-extraction';
@@ -68,7 +70,15 @@ async function runPipeline(): Promise<void> {
     );
   }
 
-  // 2. Download + R2 upload
+  // 2. Additional sources (registry-driven, excludes Caltrans)
+  const additionalResult = await step('Additional sources', () => runAdditionalSources());
+  if (additionalResult) {
+    LOG(
+      `  Sources run: ${additionalResult.sources_attempted} | succeeded: ${additionalResult.sources_succeeded} | failed: ${additionalResult.sources_failed} | new projects: ${additionalResult.total_projects_new}`,
+    );
+  }
+
+  // 4. Download + R2 upload
   const uploadResult = await step('R2 upload', () =>
     uploadPendingDocuments({ limit: LIMITS.r2Upload }),
   );
@@ -78,7 +88,7 @@ async function runPipeline(): Promise<void> {
     );
   }
 
-  // 3. Text extraction
+  // 5. Text extraction
   const textResult = await step('Text extraction', () =>
     runTextExtraction({ limit: LIMITS.textExtraction }),
   );
@@ -88,7 +98,7 @@ async function runPipeline(): Promise<void> {
     );
   }
 
-  // 4. Claude extraction
+  // 6. Claude extraction
   const claudeResult = await step('Claude extraction', () =>
     runClaudeExtraction({ limit: LIMITS.claudeExtract }),
   );
@@ -98,7 +108,7 @@ async function runPipeline(): Promise<void> {
     );
   }
 
-  // 5. OpenAI extraction
+  // 7. OpenAI extraction
   const openaiResult = await step('OpenAI extraction', () =>
     runOpenAIExtraction({ limit: LIMITS.openaiExtract }),
   );
@@ -108,7 +118,7 @@ async function runPipeline(): Promise<void> {
     );
   }
 
-  // 6. Comparison
+  // 8. Comparison
   const compResult = await step('Comparison engine', () =>
     runComparison({ limit: LIMITS.comparison }),
   );
@@ -118,7 +128,7 @@ async function runPipeline(): Promise<void> {
     );
   }
 
-  // 7. Alert matching
+  // 9. Alert matching
   const alertMatchResult = await step('Alert matching', () =>
     matchAlertsForNewBids({ limit: LIMITS.alertMatching }),
   );
@@ -128,7 +138,7 @@ async function runPipeline(): Promise<void> {
     );
   }
 
-  // 8. Digest sending
+  // 10. Digest sending
   const digestResult = await step('Digest sending', () =>
     sendPendingDigests({ limit: LIMITS.digestSend }),
   );
