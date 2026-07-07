@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
+const PROTECTED_API_PREFIXES = ['/api/bids', '/api/reviews', '/api/saved-bids'];
+
 export async function proxy(request: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -36,6 +38,11 @@ export async function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
+  // Unauthenticated request to a protected API route
+  if (!user && PROTECTED_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   // Unauthenticated user trying to access protected route
   if (!user && (pathname.startsWith('/bids') || pathname.startsWith('/settings') || pathname.startsWith('/admin'))) {
     const url = request.nextUrl.clone();
@@ -54,5 +61,13 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/bids/:path*', '/admin/:path*', '/settings/:path*', '/login'],
+  matcher: [
+    '/bids/:path*',
+    '/admin/:path*',
+    '/settings/:path*',
+    '/login',
+    '/api/bids/:path*',
+    '/api/reviews/:path*',
+    '/api/saved-bids/:path*',
+  ],
 };
